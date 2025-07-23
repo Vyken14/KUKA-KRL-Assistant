@@ -36,6 +36,11 @@ connection.onDefinition((params) => __awaiter(void 0, void 0, void 0, function* 
         return;
     const lines = doc.getText().split(/\r?\n/);
     const lineText = lines[params.position.line];
+    //Do nothing if we already are on the Decl line
+    if (/^\s*(GLOBAL\s+)?(DEF|DEFFCT)\b/i.test(lineText))
+        return undefined;
+    if (/^\s*(DECL|SIGNAL|STRUC)\b/i.test(lineText))
+        return;
     // Match function name under the cursor
     const wordMatch = lineText.match(/\b(\w+)\b/g);
     if (!wordMatch)
@@ -99,6 +104,11 @@ connection.onHover((params) => __awaiter(void 0, void 0, void 0, function* () {
         return;
     const lines = doc.getText().split(/\r?\n/);
     const lineText = lines[params.position.line];
+    //Do nothing if we already are on the Decl line
+    if (/^\s*(GLOBAL\s+)?(DEF|DEFFCT)\b/i.test(lineText))
+        return undefined;
+    if (/^\s*(DECL|SIGNAL|STRUC)\b/i.test(lineText))
+        return;
     const wordMatch = lineText.match(/\b(\w+)\b/g);
     if (!wordMatch)
         return;
