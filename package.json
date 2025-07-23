@@ -1,12 +1,12 @@
 {
-  "name": "kuka-krl-extension",
+  "name": "kuka-krl-assistant",
   "displayName": "KUKA KRL Assistant",
   "description": "Language features for KUKA KRL",
   "version": "1.0.0",
-  "publisher": "Alfred", 
+  "publisher": "Vyken14", 
   "repository": {
     "type": "git",
-    "url": "https://dev.azure.com/AlfredOrg-Dev/_git/KUKA%20KRL%20Extension"
+    "url": "https://github.com/Vyken14/KUKA-KRL-Assistant"
   },
   "engines": {
     "vscode": "^1.85.0"

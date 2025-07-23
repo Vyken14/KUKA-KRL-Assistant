@@ -7,7 +7,6 @@ A Visual Studio Code extension to help write, understand, and maintain KUKA Robo
 - Syntax highlighting
 - Go to definition
 - Hover to view function parameters
-- Variable usage and declaration tracking
 
 ## Installation
 
@@ -15,7 +14,7 @@ You can install the extension from the [Visual Studio Marketplace](https://marke
 
 ## Repository
 
-[Public Repo on Azure DevOps](https://dev.azure.com/AlfredOrg-Dev/_git/KUKA%20KRL%20Extension)
+[Public Repo on Git Hub](https://github.com/Vyken14/KUKA-KRL-Assistant)
 
 ## License
 
