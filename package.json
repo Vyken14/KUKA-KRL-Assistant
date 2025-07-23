@@ -2,7 +2,7 @@
   "name": "kuka-krl-assistant",
   "displayName": "KUKA KRL Assistant",
   "description": "Language features for KUKA KRL",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "publisher": "Vyken14", 
   "repository": {
     "type": "git",
