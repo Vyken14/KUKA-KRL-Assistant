@@ -32,30 +32,42 @@ documents.onDidChangeContent(change => {
 });
 connection.onDefinition((params) => __awaiter(void 0, void 0, void 0, function* () {
     const doc = documents.get(params.textDocument.uri);
-    if (!doc)
+    if (!doc || !workspaceRoot)
         return;
     const lines = doc.getText().split(/\r?\n/);
     const lineText = lines[params.position.line];
-    const callMatch = lineText.match(/\b(\w+)\s*\(/);
-    if (!callMatch)
+    // Match function name under the cursor
+    const wordMatch = lineText.match(/\b(\w+)\b/g);
+    if (!wordMatch)
         return;
-    const functionName = callMatch[1];
-    // Search all files in workspace
-    if (!workspaceRoot)
+    let functionName;
+    let charCount = 0;
+    for (const w of wordMatch) {
+        const start = lineText.indexOf(w, charCount);
+        const end = start + w.length;
+        if (params.position.character >= start && params.position.character <= end) {
+            functionName = w;
+            break;
+        }
+        charCount = end;
+    }
+    if (!functionName)
         return;
     const files = yield findSrcFiles(workspaceRoot);
     for (const filePath of files) {
         const content = fs.readFileSync(filePath, 'utf8');
         const fileLines = content.split(/\r?\n/);
+        // Dynamic regex using actual function name and full signature matching
+        const defRegex = new RegExp(`\\b(GLOBAL\\s+)?(DEF|DEFFCT)\\s+(\\w+\\s+)?${functionName}\\s*\\(([^)]*)\\)`, 'i');
         for (let i = 0; i < fileLines.length; i++) {
             const defLine = fileLines[i];
-            const defRegex = /\b(GLOBAL\s+)?(DEF|DEFFCT)\s+(\w+\s+)?(\w+)\s*\(/i;
-            const defMatch = defLine.match(defRegex);
-            if (defMatch && defMatch[4] === functionName) {
+            const match = defLine.match(defRegex);
+            if (match) {
                 const uri = vscode_uri_1.URI.file(filePath).toString();
+                const startCol = defLine.indexOf(functionName);
                 return node_1.Location.create(uri, {
-                    start: node_1.Position.create(i, defLine.indexOf(defMatch[4])),
-                    end: node_1.Position.create(i, defLine.indexOf(defMatch[4]) + defMatch[4].length)
+                    start: node_1.Position.create(i, startCol),
+                    end: node_1.Position.create(i, startCol + functionName.length),
                 });
             }
         }
@@ -113,7 +125,6 @@ connection.onHover((params) => __awaiter(void 0, void 0, void 0, function* () {
         for (let i = 0; i < fileLines.length; i++) {
             const defLine = fileLines[i];
             // Regex to capture function definition with parameters, e.g.:
-            // GLOBAL DEFFCT INT function2(params)
             const defRegex = new RegExp(`\\b(GLOBAL\\s+)?(DEF|DEFFCT)\\s+(\\w+\\s+)?${hoveredWord}\\s*\\(([^)]*)\\)`, 'i');
             const defMatch = defLine.match(defRegex);
             if (defMatch) {

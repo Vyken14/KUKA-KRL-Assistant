@@ -39,36 +39,49 @@ connection.onInitialize((params: InitializeParams): InitializeResult => {
 documents.onDidChangeContent(change => {
   // Could add diagnostics later
 });
-
 connection.onDefinition(
   async (params: DefinitionParams): Promise<Location | undefined> => {
     const doc = documents.get(params.textDocument.uri);
-    if (!doc) return;
+    if (!doc || !workspaceRoot) return;
 
     const lines = doc.getText().split(/\r?\n/);
     const lineText = lines[params.position.line];
-    const callMatch = lineText.match(/\b(\w+)\s*\(/);
-    if (!callMatch) return;
 
-    const functionName = callMatch[1];
+    // Match function name under the cursor
+    const wordMatch = lineText.match(/\b(\w+)\b/g);
+    if (!wordMatch) return;
 
-    // Search all files in workspace
-    if (!workspaceRoot) return;
+    let functionName: string | undefined;
+    let charCount = 0;
+    for (const w of wordMatch) {
+      const start = lineText.indexOf(w, charCount);
+      const end = start + w.length;
+      if (params.position.character >= start && params.position.character <= end) {
+        functionName = w;
+        break;
+      }
+      charCount = end;
+    }
+    if (!functionName) return;
 
     const files = await findSrcFiles(workspaceRoot);
 
     for (const filePath of files) {
       const content = fs.readFileSync(filePath, 'utf8');
       const fileLines = content.split(/\r?\n/);
+
+      // Dynamic regex using actual function name and full signature matching
+      const defRegex = new RegExp(`\\b(GLOBAL\\s+)?(DEF|DEFFCT)\\s+(\\w+\\s+)?${functionName}\\s*\\(([^)]*)\\)`, 'i');
+
       for (let i = 0; i < fileLines.length; i++) {
         const defLine = fileLines[i];
-        const defRegex = /\b(GLOBAL\s+)?(DEF|DEFFCT)\s+(\w+\s+)?(\w+)\s*\(/i;
-        const defMatch = defLine.match(defRegex);
-        if (defMatch && defMatch[4] === functionName) {
+        const match = defLine.match(defRegex);
+        if (match) {
           const uri = URI.file(filePath).toString();
+          const startCol = defLine.indexOf(functionName);
           return Location.create(uri, {
-            start: Position.create(i, defLine.indexOf(defMatch[4])),
-            end: Position.create(i, defLine.indexOf(defMatch[4]) + defMatch[4].length)
+            start: Position.create(i, startCol),
+            end: Position.create(i, startCol + functionName.length),
           });
         }
       }
@@ -77,6 +90,8 @@ connection.onDefinition(
     return undefined;
   }
 );
+
+
 
 // Utility: Recursively find .src .dat files in workspace
 async function findSrcFiles(dir: string): Promise<string[]> {
@@ -128,7 +143,6 @@ connection.onHover(async (params) => {
     for (let i = 0; i < fileLines.length; i++) {
       const defLine = fileLines[i];
       // Regex to capture function definition with parameters, e.g.:
-      // GLOBAL DEFFCT INT function2(params)
       const defRegex = new RegExp(`\\b(GLOBAL\\s+)?(DEF|DEFFCT)\\s+(\\w+\\s+)?${hoveredWord}\\s*\\(([^)]*)\\)`, 'i');
       const defMatch = defLine.match(defRegex);
       if (defMatch) {
