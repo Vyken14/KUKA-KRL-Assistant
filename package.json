@@ -1,0 +1,56 @@
+{
+  "name": "kuka-krl-extension",
+  "displayName": "KUKA KRL Assistant",
+  "description": "Language features for KUKA KRL",
+  "version": "1.0.0",
+  "publisher": "Alfred", 
+  "repository": {
+    "type": "git",
+    "url": "https://dev.azure.com/AlfredOrg-Dev/_git/KUKA%20KRL%20Extension"
+  },
+  "engines": {
+    "vscode": "^1.85.0"
+  },
+  "main": "./client/out/extension.js",
+  "contributes": {
+    "languages": [
+      {
+        "id": "krl",
+        "aliases": [
+          "KUKA KRL",
+          "krl"
+        ],
+        "extensions": [
+          ".src",
+          ".dat",
+          ".sub"
+        ],
+        "configuration": "./client/krl-language-configuration.json"
+      }
+    ],
+    "snippets": [
+      {
+        "language": "krl",
+        "path": "./client/snippets/krl.code-snippets"
+      }
+    ],
+    "grammars": [
+      {
+        "language": "krl",
+        "scopeName": "source.krl",
+        "path": "./client/syntaxes/krl.tmLanguage.json"
+      }
+    ]
+  },
+  "scripts": {
+    "compile": "tsc -b client server"
+  },
+  "devDependencies": {
+    "typescript": "^4.9.5"
+  },
+  "dependencies": {
+    "vscode-languageserver": "^9.0.1",
+    "vscode-languageserver-textdocument": "^1.0.12",
+    "vscode-uri": "^3.1.0"
+  }
+}
