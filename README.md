@@ -1,11 +1,11 @@
-# KUKA KRL Advanced
+# KUKA KRL Assistant
 
 A Visual Studio Code extension to help write, understand, and maintain KUKA Robot Language (KRL) programs.
 
 ## Features
 
-- Syntax highlighting
-- Go to definition
+- Syntax highlighting (Snippets & Color code)
+- Go to definition for function and variables
 - Hover to view function parameters
 
 ## Installation
