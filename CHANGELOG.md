@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [1.1.1] - 2025-07-23
+### Added
+- Do nothing if the function clicked is already on DECL line
+
+### Fixed
+- `Go to Definition` sometimes didn't work with function
+- `Go to Definition` sometimes did a peek insteak of a Go To on variables
+
+---
+
 ## [1.1.0] - 2025-07-23
 ### Added
 - Basic cross-file support for variable declarations using `DECL`, `SIGNAL`, and `STRUC`.
