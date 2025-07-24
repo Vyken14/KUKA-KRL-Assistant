@@ -9,6 +9,7 @@ var __awaiter = (this && this.__awaiter) || function (thisArg, _arguments, P, ge
     });
 };
 Object.defineProperty(exports, "__esModule", { value: true });
+exports.validateAllDatFiles = void 0;
 const node_1 = require("vscode-languageserver/node");
 const vscode_languageserver_textdocument_1 = require("vscode-languageserver-textdocument");
 const fs = require("fs");
@@ -19,6 +20,10 @@ const documents = new node_1.TextDocuments(vscode_languageserver_textdocument_1.
 let workspaceRoot = null;
 connection.onInitialize((params) => {
     workspaceRoot = params.rootUri ? vscode_uri_1.URI.parse(params.rootUri).fsPath : null;
+    documents.listen(connection);
+    connection.onInitialized(() => {
+        validateAllDatFiles(connection);
+    });
     return {
         capabilities: {
             textDocumentSync: node_1.TextDocumentSyncKind.Incremental,
@@ -28,7 +33,9 @@ connection.onInitialize((params) => {
     };
 });
 documents.onDidChangeContent(change => {
-    // Could add diagnostics later
+    if (change.document.uri.endsWith('.dat')) {
+        validateDatFile(change.document, connection);
+    }
 });
 connection.onDefinition((params) => __awaiter(void 0, void 0, void 0, function* () {
     const doc = documents.get(params.textDocument.uri);
@@ -150,6 +157,47 @@ connection.onHover((params) => __awaiter(void 0, void 0, void 0, function* () {
     }
     return null;
 }));
+// Call this once during initialization
+function validateAllDatFiles(connection) {
+    documents.all().forEach(document => {
+        if (document.uri.endsWith('.dat')) {
+            validateDatFile(document, connection);
+        }
+    });
+}
+exports.validateAllDatFiles = validateAllDatFiles;
+function validateDatFile(document, connection) {
+    const diagnostics = [];
+    const text = document.getText();
+    const lines = text.split(/\r?\n/);
+    let insidePublicDefdat = false;
+    for (let i = 0; i < lines.length; i++) {
+        const line = lines[i].trim();
+        // Detect start of PUBLIC DEFDAT
+        const defdatMatch = line.match(/^DEFDAT\s+\w+\s+PUBLIC/i);
+        if (defdatMatch) {
+            insidePublicDefdat = true;
+            continue;
+        }
+        // If we hit the end of the file or a new DEFDAT without PUBLIC, exit the public block
+        if (/^DEFDAT\s+\w+/i.test(line) && !/PUBLIC/i.test(line)) {
+            insidePublicDefdat = false;
+        }
+        // Look for global declarations
+        if (/^(DECL|SIGNAL|STRUC)/i.test(line) && !insidePublicDefdat) {
+            diagnostics.push({
+                severity: node_1.DiagnosticSeverity.Warning,
+                range: {
+                    start: { line: i, character: 0 },
+                    end: { line: i, character: line.length }
+                },
+                message: `Global declaration "${line.split(/\s+/)[0]}" is not inside a PUBLIC DEFDAT.`,
+                source: 'krl-linter'
+            });
+        }
+    }
+    connection.sendDiagnostics({ uri: document.uri, diagnostics });
+}
 documents.listen(connection);
 connection.listen();
 //# sourceMappingURL=server.js.map
