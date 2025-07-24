@@ -76,7 +76,6 @@ function activate(context) {
     //Push when workspace changes
     context.subscriptions.push(vscode.workspace.onDidOpenTextDocument(document => {
         if (document.languageId === 'krl') {
-            console.log(`Opened KRL file: ${document.uri.fsPath}`);
             validateTextDocument(document);
         }
     }));
@@ -164,7 +163,6 @@ function validateAllKrlFiles() {
                 const alreadyOpen = vscode.workspace.textDocuments.find(doc => doc.uri.fsPath === file.fsPath);
                 const document = alreadyOpen !== null && alreadyOpen !== void 0 ? alreadyOpen : yield vscode.workspace.openTextDocument(file);
                 if (['src', 'dat', 'sub'].includes(document.languageId)) {
-                    console.log(`Validating file: ${file.fsPath}`);
                     validateTextDocument(document);
                 }
             }

@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [1.2.0] - 2025-07-24
+### Added
+- Error if a variable length is more than 24 characters
+- Error if a GLOBAL is used without DECL, SIGNAL, STRUC
+- Check all files for error when opening a workspace or at VS Code startup
+
+---
+
 ## [1.1.1] - 2025-07-23
 ### Added
 - Do nothing if the function clicked is already on DECL line
