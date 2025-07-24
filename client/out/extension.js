@@ -126,7 +126,7 @@ function validateTextDocument(document) {
                         const varIndex = fullText.indexOf(varName);
                         if (varIndex >= 0) {
                             const range = new vscode.Range(new vscode.Position(i, varIndex), new vscode.Position(i, varIndex + varName.length));
-                            const diagnostic = new vscode.Diagnostic(range, 'The variable is too long (max 24 characters)', vscode.DiagnosticSeverity.Warning);
+                            const diagnostic = new vscode.Diagnostic(range, 'The variable is too long (max 24 characters)', vscode.DiagnosticSeverity.Error);
                             diagnostic.source = 'KRL Variable Length';
                             diagnostics.push(diagnostic);
                         }
@@ -139,7 +139,7 @@ function validateTextDocument(document) {
                 diagnostics.push({
                     message: `'GLOBAL' must be used with DECL, STRUC, or SIGNAL on the same line.`,
                     range,
-                    severity: vscode.DiagnosticSeverity.Error,
+                    severity: vscode.DiagnosticSeverity.Warning,
                     source: 'krl-linter'
                 });
             }

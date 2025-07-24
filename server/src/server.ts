@@ -12,6 +12,9 @@ import {
   Connection,
   Diagnostic,
   DiagnosticSeverity,
+  CompletionItemKind,
+  CompletionParams,
+  CompletionItem,
 } from 'vscode-languageserver/node';
 
 import {
@@ -201,6 +204,7 @@ function validateDatFile(document: TextDocument, connection: Connection) {
   for (let i = 0; i < lines.length; i++) {
     const line = lines[i].trim();
 
+
     // Detect start of PUBLIC DEFDAT
     const defdatMatch = line.match(/^DEFDAT\s+\w+\s+PUBLIC/i);
     if (defdatMatch) {
@@ -229,6 +233,75 @@ function validateDatFile(document: TextDocument, connection: Connection) {
 
   connection.sendDiagnostics({ uri: document.uri, diagnostics });
 }
+
+//Variables Management 
+interface StructDefinition {
+  type: string;
+  members: string[];
+}
+
+const structDefinitions: Map<string, StructDefinition> = new Map();
+const structInstances: Map<string, string> = new Map();
+
+function parseDatForStructs(text: string) {
+  const lines = text.split(/\r?\n/);
+
+  for (const line of lines) {
+    const trimmed = line.trim();
+
+    // Match GLOBAL STRUC lines
+    const strucMatch = trimmed.match(/^GLOBAL\s+STRUC\s+(\w+)\s+(\w+)\s+(.+)$/i);
+    if (strucMatch) {
+      const structName = strucMatch[1];
+      const type = strucMatch[2];
+      const members = strucMatch[3].split(',').map(m => m.trim());
+      structDefinitions.set(structName, { type, members });
+    }
+
+    // Match DECL instance lines
+    const declMatch = trimmed.match(/^DECL\s+(\w+)\s+(\w+)/i);
+    if (declMatch) {
+      const type = declMatch[1];
+      const instanceName = declMatch[2];
+      structInstances.set(instanceName, type);
+    }
+  }
+}
+
+connection.onCompletion((params: CompletionParams): CompletionItem[] => {
+  console.log('Completion request received for:', params.textDocument.uri);
+  const doc = documents.get(params.textDocument.uri);
+  if (!doc) return [];
+
+  const text = doc.getText();
+  const offset = doc.offsetAt(params.position);
+  const prefix = text.slice(0, offset);
+  const match = prefix.match(/(\w+)\.$/); // Matches VarTest.
+
+  if (match) {
+    const instanceName = match[1];
+    const typeName = structInstances.get(instanceName);
+    if (!typeName) return [];
+
+    // Find corresponding struct definition
+    for (const [structName, def] of structDefinitions.entries()) {
+      if (def.type === typeName) {
+        return def.members.map(member => ({
+          label: `${instanceName}.${member}`,
+          kind: CompletionItemKind.Field,
+          detail: `Member of ${typeName}`
+        }));
+      }
+    }
+  }
+
+  return [];
+});
+
+
+
+
+
 
 documents.listen(connection);
 connection.listen();
