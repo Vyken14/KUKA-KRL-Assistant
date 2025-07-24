@@ -92,22 +92,15 @@ function activate(context) {
                 const line = document.lineAt(i);
                 const fullText = line.text.trim();
                 const lineText = fullText.split(';')[0].trim();
-                // Check if line contains DECL, STRUC, SIGNAL anywhere (case-insensitive)
                 if (/\b(DECL|STRUC|SIGNAL)\b/i.test(lineText)) {
-                    console.log(`Processing line ${i + 1}: ${lineText}`);
-                    // Remove DECL, STRUC, SIGNAL, GLOBAL, and types from start to isolate variables part
-                    // Example: DECL GLOBAL INT var1=5, var2
-                    // We'll remove leading keywords, then split vars by comma
                     const varPart = lineText
-                        // Remove keywords at start
                         .replace(/\bDECL\b/i, '')
                         .replace(/\bGLOBAL\b/i, '')
                         .replace(/\b(INT|FRAME|LOAD|REAL|BOOL|STRING|SIGNAL|STRUC)\b/i, '')
+                        .replace(/\b\w+_T\b/i, '')
                         .trim();
-                    // Split by comma and clean tokens
                     const variableTokens = varPart.split(',').map(v => v.trim());
                     for (const token of variableTokens) {
-                        // Extract variable name before any assignment or indexing
                         const rawVar = token.split('=')[0].split('[')[0].trim();
                         const match = rawVar.match(/^([a-zA-Z_][a-zA-Z0-9_]*)/);
                         const varName = match ? match[1] : null;
@@ -115,7 +108,6 @@ function activate(context) {
                             const varIndex = line.text.indexOf(varName);
                             if (varIndex >= 0) {
                                 const range = new vscode.Range(new vscode.Position(i, varIndex), new vscode.Position(i, varIndex + varName.length));
-                                console.log(`Diagnostic for "${varName}" at line ${i + 1}, col ${varIndex}-${varIndex + varName.length}`);
                                 const message = 'The variable is too long (max 24 characters)';
                                 const diagnostic = new vscode.Diagnostic(range, message, vscode.DiagnosticSeverity.Warning);
                                 diagnostic.source = 'KRL Variable Length';
