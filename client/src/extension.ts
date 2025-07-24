@@ -7,17 +7,12 @@ import {
 } from 'vscode-languageclient/node';
 import * as path from 'path';
 
-
 const diagnosticCollection = vscode.languages.createDiagnosticCollection('krl');
-
 let client: LanguageClient;
 
 export function activate(context: vscode.ExtensionContext) {
-  console.log('Extension activated');
-  const serverModule = context.asAbsolutePath(
-    path.join('server', 'out', 'server.js')
-  );
 
+  const serverModule = context.asAbsolutePath(path.join('server', 'out', 'server.js'));
   const serverOptions: ServerOptions = {
     run: { module: serverModule, transport: TransportKind.ipc },
     debug: { module: serverModule, transport: TransportKind.ipc }
@@ -30,134 +25,178 @@ export function activate(context: vscode.ExtensionContext) {
     }
   };
 
-  client = new LanguageClient(
-    'kukaKRL',
-    'KUKA KRL Language Server',
-    serverOptions,
-    clientOptions
-  );
+  client = new LanguageClient('kukaKRL', 'KUKA KRL Language Server', serverOptions, clientOptions);
 
+  context.subscriptions.push(vscode.languages.registerDefinitionProvider('krl', {
+    async provideDefinition(document, position) {
+      const wordRange = document.getWordRangeAtPosition(position);
+      if (!wordRange) return;
 
-  context.subscriptions.push(  vscode.languages.registerDefinitionProvider('krl', {
-  async provideDefinition(document, position, token) {
-    const wordRange = document.getWordRangeAtPosition(position);
-    if (!wordRange) return;
+      const word = document.getText(wordRange);
 
-    const word = document.getText(wordRange);
-
-    // First: check current file
-    const lines = document.getText().split('\n');
-    for (let i = 0; i < lines.length; i++) {
-      const rawLine = lines[i];
-      const line = rawLine.trim();
-
-      if (
-        (line.startsWith('DECL') || line.startsWith('SIGNAL') || line.startsWith('STRUC')) &&
-        line.includes(word)
-      ) {
-        const varRegex = new RegExp(`\\b${word}\\b`);
-        if (varRegex.test(line)) {
-          const startIdx = rawLine.indexOf(word);
-          if (startIdx >= 0) {
-            const start = new vscode.Position(i, startIdx);
-            const end = new vscode.Position(i, startIdx + word.length);
-            return new vscode.Location(document.uri, new vscode.Range(start, end));
+      const lines = document.getText().split('\n');
+      for (let i = 0; i < lines.length; i++) {
+        const rawLine = lines[i];
+        const line = rawLine.trim();
+        if ((line.startsWith('DECL') || line.startsWith('SIGNAL') || line.startsWith('STRUC')) && line.includes(word)) {
+          const varRegex = new RegExp(`\\b${word}\\b`);
+          if (varRegex.test(line)) {
+            const startIdx = rawLine.indexOf(word);
+            if (startIdx >= 0) {
+              return new vscode.Location(document.uri,
+                new vscode.Range(new vscode.Position(i, startIdx), new vscode.Position(i, startIdx + word.length)));
+            }
           }
-
         }
       }
-    }
 
-    // Then: check other files in workspace
-    const files = await vscode.workspace.findFiles('**/*.{src,dat,sub}', '**/node_modules/**');
-
+      const files = await vscode.workspace.findFiles('**/*.{src,dat,sub}', '**/node_modules/**');
       for (const file of files) {
         if (file.fsPath === document.uri.fsPath) continue;
-
         const otherDoc = await vscode.workspace.openTextDocument(file);
         const otherLines = otherDoc.getText().split('\n');
 
         for (let i = 0; i < otherLines.length; i++) {
           const rawLine = otherLines[i];
           const line = rawLine.trim();
-
-          if (
-            (line.startsWith('DECL') || line.startsWith('SIGNAL') || line.startsWith('STRUC')) &&
-            line.includes(word)
-          ) {
+          if ((line.startsWith('DECL') || line.startsWith('SIGNAL') || line.startsWith('STRUC')) && line.includes(word)) {
             const varRegex = new RegExp(`\\b${word}\\b`);
             if (varRegex.test(line)) {
               const startIdx = rawLine.indexOf(word);
               if (startIdx >= 0) {
-                const start = new vscode.Position(i, startIdx);
-                const end = new vscode.Position(i, startIdx + word.length);
-                return new vscode.Location(file, new vscode.Range(start, end));
+                return new vscode.Location(file,
+                  new vscode.Range(new vscode.Position(i, startIdx), new vscode.Position(i, startIdx + word.length)));
               }
-
             }
           }
         }
       }
+
       return null;
     }
-  }))
+  }));
 
+  //Push when workspace changes
+  context.subscriptions.push(vscode.workspace.onDidOpenTextDocument(document => {
+    if (document.languageId === 'krl') {
+      validateTextDocument(document);
+    }
+  }));
 
   context.subscriptions.push(vscode.workspace.onDidChangeTextDocument(event => {
-    const document = event.document;
-    if (document.languageId !== 'krl') return;
+    if (event.document.languageId === 'krl') {
+      validateTextDocument(event.document);
+    }
+  }));
 
-    const diagnostics: vscode.Diagnostic[] = [];
+  context.subscriptions.push(vscode.workspace.onDidSaveTextDocument(document => {
+    if (document.languageId === 'krl') {
+      validateTextDocument(document);
+    }
+  }));
 
-    for (let i = 0; i < document.lineCount; i++) {
-      try {
-        const line = document.lineAt(i);
-        const fullText = line.text.trim();
-        const lineText = fullText.split(';')[0].trim();
+  const clientStartPromise = client.start();
 
-        if (/\b(DECL|STRUC|SIGNAL)\b/i.test(lineText)) {
+  clientStartPromise.then(() => {
+    // After client is ready, validate already open files
+    vscode.workspace.textDocuments.forEach(document => { 
+      if (document.languageId === 'krl') {
+        validateTextDocument(document);
+      }
+    });
+    setTimeout(() => {
+  validateAllKrlFiles();
+}, 2000); 
+  });
+}
 
-          const varPart = lineText
-            .replace(/\bDECL\b/i, '')
-            .replace(/\bGLOBAL\b/i, '')
-            .replace(/\b(INT|FRAME|LOAD|REAL|BOOL|STRING|SIGNAL|STRUC)\b/i, '')
-            .replace(/\b\w+_T\b/i, '')
-            .trim();
+function validateTextDocument(document: vscode.TextDocument) {
+  const diagnostics: vscode.Diagnostic[] = [];
 
-          const variableTokens = varPart.split(',').map(v => v.trim());
+  for (let i = 0; i < document.lineCount; i++) {
+    try {
+      const line = document.lineAt(i);
+      const fullText = line.text;
+      const lineText = fullText.split(';')[0].trim();
 
-          for (const token of variableTokens) {
-            const rawVar = token.split('=')[0].split('[')[0].trim();
-            const match = rawVar.match(/^([a-zA-Z_][a-zA-Z0-9_]*)/);
-            const varName = match ? match[1] : null;
+      if (/\b(DECL|STRUC|SIGNAL)\b/i.test(lineText)) {
+        const varPart = lineText
+          .replace(/\bDECL\b/i, '')
+          .replace(/\bGLOBAL\b/i, '')
+          .replace(/\b(INT|FRAME|LOAD|REAL|BOOL|STRING|SIGNAL|STRUC)\b/i, '')
+          .replace(/\b\w+_T\b/i, '')
+          .trim();
 
-            if (varName && varName.length > 24) {
-              const varIndex = line.text.indexOf(varName);
-              if (varIndex >= 0) {
-                const range = new vscode.Range(
-                  new vscode.Position(i, varIndex),
-                  new vscode.Position(i, varIndex + varName.length)
-                );
-                const message = 'The variable is too long (max 24 characters)';
-                const diagnostic = new vscode.Diagnostic(range, message, vscode.DiagnosticSeverity.Warning);
-                diagnostic.source = 'KRL Variable Length';
-                diagnostics.push(diagnostic);
-              }
+        const variableTokens = varPart.split(',').map(v => v.trim());
+
+        for (const token of variableTokens) {
+          const rawVar = token.split('=')[0].split('[')[0].trim();
+          const match = rawVar.match(/^([a-zA-Z_][a-zA-Z0-9_]*)/);
+          const varName = match ? match[1] : null;
+
+          if (varName && varName.length > 24) {
+            const varIndex = fullText.indexOf(varName);
+            if (varIndex >= 0) {
+              const range = new vscode.Range(
+                new vscode.Position(i, varIndex),
+                new vscode.Position(i, varIndex + varName.length)
+              );
+              const diagnostic = new vscode.Diagnostic(
+                range,
+                'The variable is too long (max 24 characters)',
+                vscode.DiagnosticSeverity.Warning
+              );
+              diagnostic.source = 'KRL Variable Length';
+              diagnostics.push(diagnostic);
             }
           }
         }
-      } catch (error) {
-        console.error(`Error processing line ${i + 1}:`, error);
       }
+
+      if (/\bGLOBAL\b/i.test(lineText) && !/\b(DECL|DEF|DEFFCT|STRUC|SIGNAL)\b/i.test(lineText)) {
+        const globalIndex = fullText.indexOf('GLOBAL');
+        const range = new vscode.Range(i, globalIndex, i, globalIndex + 'GLOBAL'.length);
+        diagnostics.push({
+          message: `'GLOBAL' must be used with DECL, STRUC, or SIGNAL on the same line.`,
+          range,
+          severity: vscode.DiagnosticSeverity.Error,
+          source: 'krl-linter'
+        });
+      }
+    } catch (error) {
+      console.error(`Error processing line ${i + 1}:`, error);
     }
+  }
 
-    diagnosticCollection.set(document.uri, diagnostics);
-  }));
-
-  client.start();
+  diagnosticCollection.set(document.uri, diagnostics);
 }
 
-export function deactivate(): Thenable<void> | undefined {  
+async function validateAllKrlFiles() {
+  const patterns = ['**/*.src', '**/*.dat', '**/*.sub'];
+  const uris: vscode.Uri[] = [];
+
+  for (const pattern of patterns) {
+    const matched = await vscode.workspace.findFiles(pattern);
+    uris.push(...matched);
+  }
+
+  for (const file of uris) {
+    try {
+      const alreadyOpen = vscode.workspace.textDocuments.find(doc => doc.uri.fsPath === file.fsPath);
+      const document = alreadyOpen ?? await vscode.workspace.openTextDocument(file);
+
+      if (['src', 'dat', 'sub'].includes(document.languageId)) {
+        validateTextDocument(document);
+      }
+    } catch (error) {
+      console.error(`Failed to validate ${file.fsPath}`, error);
+    }
+  }
+}
+
+
+
+export function deactivate(): Thenable<void> | undefined {
   diagnosticCollection.clear();
   diagnosticCollection.dispose();
   if (!client) return undefined;
