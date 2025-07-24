@@ -28,16 +28,30 @@ connection.onInitialize((params) => {
         capabilities: {
             textDocumentSync: node_1.TextDocumentSyncKind.Incremental,
             definitionProvider: true,
-            hoverProvider: true
+            hoverProvider: true,
+            completionProvider: {
+                triggerCharacters: ['.']
+            }
         }
     };
 });
 documents.onDidChangeContent(change => {
+    logToFile("Document changed: " + change.document.uri);
+    console.log(`Document changed: ${change.document.uri}`);
     if (change.document.uri.endsWith('.dat')) {
         validateDatFile(change.document, connection);
     }
+    parseKrlFile(change.document.getText());
 });
+documents.onDidOpen(e => {
+    console.log(`Opened: ${e.document.uri}`);
+});
+const logFile = path.join(__dirname, 'krl-server.log');
+function logToFile(message) {
+    fs.appendFileSync(logFile, `[${new Date().toISOString()}] ${message}\n`);
+}
 connection.onDefinition((params) => __awaiter(void 0, void 0, void 0, function* () {
+    console.log(`Definition requested for: ${params.textDocument.uri} at ${params.position.line}:${params.position.character}`);
     const doc = documents.get(params.textDocument.uri);
     if (!doc || !workspaceRoot)
         return;
@@ -173,7 +187,6 @@ function validateDatFile(document, connection) {
     let insidePublicDefdat = false;
     for (let i = 0; i < lines.length; i++) {
         const line = lines[i].trim();
-        parseDatForStructs(line);
         // Detect start of PUBLIC DEFDAT
         const defdatMatch = line.match(/^DEFDAT\s+\w+\s+PUBLIC/i);
         if (defdatMatch) {
@@ -199,56 +212,75 @@ function validateDatFile(document, connection) {
     }
     connection.sendDiagnostics({ uri: document.uri, diagnostics });
 }
-const structDefinitions = new Map();
-const structInstances = new Map();
-function parseDatForStructs(text) {
-    const lines = text.split(/\r?\n/);
-    for (const line of lines) {
-        const trimmed = line.trim();
-        // Match GLOBAL STRUC lines
-        const strucMatch = trimmed.match(/^GLOBAL\s+STRUC\s+(\w+)\s+(\w+)\s+(.+)$/i);
-        if (strucMatch) {
-            const structName = strucMatch[1];
-            const type = strucMatch[2];
-            const members = strucMatch[3].split(',').map(m => m.trim());
-            structDefinitions.set(structName, { type, members });
+let variableStructTypes = {};
+let structDefinitions = {};
+function parseKrlFile(datContent) {
+    logToFile("Parsing DAT file...");
+    const structRegex = /^GLOBAL\s+STRUC\s+(\w+)\s+(.+)$/gm;
+    let match;
+    while ((match = structRegex.exec(datContent)) !== null) {
+        const structName = match[1];
+        const membersRaw = match[2];
+        const members = [];
+        // Match lines like: "INT iVar1, iVar2 REAL rVar3"
+        const typeRegex = /\b(?:INT|REAL|BOOL|CHAR|STRING)\s+([\w, ]+)/g;
+        let typeMatch;
+        while ((typeMatch = typeRegex.exec(membersRaw)) !== null) {
+            const vars = typeMatch[1].split(',').map(v => v.trim());
+            members.push(...vars);
         }
-        // Match DECL instance lines
-        const declMatch = trimmed.match(/^DECL\s+(\w+)\s+(\w+)/i);
-        if (declMatch) {
-            const type = declMatch[1];
-            const instanceName = declMatch[2];
-            structInstances.set(instanceName, type);
-        }
+        structDefinitions[structName] = members;
+        logToFile(`Defined struct "${structName}" with members: ${members.join(', ')}`);
     }
 }
+connection.onNotification('custom/validateFile', (params) => {
+    console.log(`Validating file: ${params.uri}`);
+    if (params.uri.match(/\.(dat|src|sub)$/i)) {
+        parseKrlFile(params.text);
+    }
+});
 connection.onCompletion((params) => {
-    console.log('Completion request received for:', params.textDocument.uri);
-    const doc = documents.get(params.textDocument.uri);
-    if (!doc)
+    const document = documents.get(params.textDocument.uri);
+    if (!document)
         return [];
-    const text = doc.getText();
-    const offset = doc.offsetAt(params.position);
-    const prefix = text.slice(0, offset);
-    const match = prefix.match(/(\w+)\.$/); // Matches VarTest.
-    if (match) {
-        const instanceName = match[1];
-        const typeName = structInstances.get(instanceName);
-        if (!typeName)
-            return [];
-        // Find corresponding struct definition
-        for (const [structName, def] of structDefinitions.entries()) {
-            if (def.type === typeName) {
-                return def.members.map(member => ({
-                    label: `${instanceName}.${member}`,
-                    kind: node_1.CompletionItemKind.Field,
-                    detail: `Member of ${typeName}`
-                }));
-            }
+    logToFile(`Completion requested for: ${params.textDocument.uri} at ${params.position.line}:${params.position.character}`);
+    const lines = document.getText().split(/\r?\n/);
+    // Step 1: Scan document and build variableStructTypes
+    variableStructTypes = {}; // reset
+    for (const line of lines) {
+        const cleanedLine = line.trim().replace(/^GLOBAL\s+DECL\s+/i, '');
+        const parts = cleanedLine.split(/\s+/);
+        if (parts.length >= 2) {
+            const [type, varName] = parts;
+            variableStructTypes[varName] = type;
+            logToFile(`Mapped variable "${varName}" to struct "${type}"`);
         }
     }
-    return [];
+    // Step 2: Get text before cursor
+    const line = lines[params.position.line];
+    const textBefore = line.substring(0, params.position.character);
+    const match = textBefore.match(/(\w+)\.$/);
+    logToFile(`Text before cursor: "${textBefore}"`);
+    logToFile(`Match: "${match}"`);
+    if (!match)
+        return [];
+    const varName = match[1];
+    const structName = variableStructTypes[varName];
+    logToFile(`Requested varName: "${varName}"`);
+    logToFile(`Requested structName: "${structName}"`);
+    logToFile(`Available structDefinitions: ${JSON.stringify(structDefinitions, null, 2)}`);
+    if (!structName)
+        return [];
+    const members = structDefinitions[structName];
+    logToFile(`Members found: ${members ? members.join(', ') : 'None'}`);
+    if (!members)
+        return [];
+    logToFile(`Providing completions for struct "${structName}" with members: ${members.join(', ')}`);
+    return members.map(member => ({
+        label: member,
+        kind: node_1.CompletionItemKind.Field
+    }));
 });
-documents.listen(connection);
 connection.listen();
+documents.listen(connection);
 //# sourceMappingURL=server.js.map

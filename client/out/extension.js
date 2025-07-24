@@ -24,7 +24,7 @@ function activate(context) {
     const clientOptions = {
         documentSelector: [{ scheme: 'file', language: 'krl' }],
         synchronize: {
-            fileEvents: vscode.workspace.createFileSystemWatcher('**/.clientrc')
+            fileEvents: vscode.workspace.createFileSystemWatcher('**/*.{dat,src,sub}')
         }
     };
     client = new node_1.LanguageClient('kukaKRL', 'KUKA KRL Language Server', serverOptions, clientOptions);
@@ -82,6 +82,11 @@ function activate(context) {
     context.subscriptions.push(vscode.workspace.onDidChangeTextDocument(event => {
         if (event.document.languageId === 'krl') {
             validateTextDocument(event.document);
+            console.log("Sending custom/validateFile notification");
+            client.sendNotification('custom/validateFile', {
+                uri: event.document.uri.toString(),
+                text: event.document.getText(),
+            });
         }
     }));
     context.subscriptions.push(vscode.workspace.onDidSaveTextDocument(document => {

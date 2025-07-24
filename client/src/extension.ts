@@ -21,7 +21,7 @@ export function activate(context: vscode.ExtensionContext) {
   const clientOptions: LanguageClientOptions = {
     documentSelector: [{ scheme: 'file', language: 'krl' }],
     synchronize: {
-      fileEvents: vscode.workspace.createFileSystemWatcher('**/.clientrc')
+      fileEvents: vscode.workspace.createFileSystemWatcher('**/*.{dat,src,sub}')
     }
   };
 
@@ -86,7 +86,17 @@ export function activate(context: vscode.ExtensionContext) {
   context.subscriptions.push(vscode.workspace.onDidChangeTextDocument(event => {
     if (event.document.languageId === 'krl') {
       validateTextDocument(event.document);
-    }
+
+      console.log("Sending custom/validateFile notification");  
+      client.sendNotification('custom/validateFile', {
+      uri: event.document.uri.toString(),
+      text: event.document.getText(),
+    });    
+    
+ 
+  
+  }  
+
   }));
 
   context.subscriptions.push(vscode.workspace.onDidSaveTextDocument(document => {
@@ -107,6 +117,8 @@ export function activate(context: vscode.ExtensionContext) {
     setTimeout(() => {
   validateAllKrlFiles();
 }, 2000); 
+
+
   });
 }
 
