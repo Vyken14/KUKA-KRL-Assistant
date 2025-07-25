@@ -40,28 +40,39 @@ connection.onInitialize((params: InitializeParams): InitializeResult => {
   //delete log file if it exists -- DEBUG ONLY
   if (fs.existsSync(logFile)) {
     fs.unlinkSync(logFile);
-    logToFile('Log file deleted on server start');
   }
 
+connection.onInitialized(async () => {
+  if (workspaceRoot) {
+    const files = getAllDatFiles(workspaceRoot); // Assume this gives you all .dat file paths
 
+    // Step 1: Collect variables from all files
+    for (const filePath of files) {
+      const content = fs.readFileSync(filePath, 'utf8');
+      const uri = URI.file(filePath).toString();
 
-  connection.onInitialized(() => {
-    if (workspaceRoot) {
-      const files = getAllDatFiles(workspaceRoot); // You must implement this (see below)
-      files.forEach(async filePath => {
-        const content = fs.readFileSync(filePath, 'utf8');
-        const uri = URI.file(filePath).toString();
-
-        const collector = new DeclaredVariableCollector();
-        collector.extractFromText(content);
-        fileVariablesMap.set(uri, collector.getVariables());
-
-        const mergedVariables = mergeAllVariables(fileVariablesMap);
-        const diagnostics = await validateVariablesUsage(TextDocument.create(uri, 'krl', 1, content), mergedVariables);
-        connection.sendDiagnostics({ uri, diagnostics });
-      });
+      const collector = new DeclaredVariableCollector();
+      collector.extractFromText(content);
+      fileVariablesMap.set(uri, collector.getVariables());
     }
-  });
+
+    // Step 2: Once all variables are collected, run validation per file
+    const mergedVariables = mergeAllVariables(fileVariablesMap);
+
+    for (const filePath of files) {
+      const content = fs.readFileSync(filePath, 'utf8');
+      const uri = URI.file(filePath).toString();
+
+      const diagnostics = await validateVariablesUsage(
+        TextDocument.create(uri, 'krl', 1, content),
+        mergedVariables
+      );
+
+      connection.sendDiagnostics({ uri, diagnostics });
+    }
+  }
+});
+
 
   return {
     capabilities: {
@@ -89,6 +100,7 @@ documents.onDidChangeContent(async change => {
   collector.extractFromText(document.getText());
   fileVariablesMap.set(document.uri, collector.getVariables());
 
+  logToFile(`New anlaysis for file: ${document.uri}`);
   const mergedVariables = mergeAllVariables(fileVariablesMap);
   const diagnostics = await validateVariablesUsage(document, mergedVariables);
   connection.sendDiagnostics({ uri: document.uri, diagnostics });
@@ -278,7 +290,7 @@ function validateDatFile(document: TextDocument, connection: Connection) {
 
     // Look for global declarations
     if (/^(DECL|SIGNAL|STRUC)/i.test(line) && !insidePublicDefdat) {
-      diagnostics.push({
+        const newDiagnostic: Diagnostic = {
         severity: DiagnosticSeverity.Error,
         range: {
           start: { line: i, character: 0 },
@@ -286,7 +298,11 @@ function validateDatFile(document: TextDocument, connection: Connection) {
         },
         message: `Global declaration "${line.split(/\s+/)[0]}" is not inside a PUBLIC DEFDAT.`,
         source: 'krl-linter'
-      });
+      }
+
+        if (!isDuplicateDiagnostic(newDiagnostic, diagnostics)) {
+          diagnostics.push(newDiagnostic);
+        }
     }
   }
 
@@ -474,7 +490,7 @@ async function validateVariablesUsage(document: TextDocument, variableTypes: { [
   const text = document.getText();
   const lines = text.split(/\r?\n/);
 
-  logToFile(`Extracted variables : ${JSON.stringify(variableTypes, null, 2)}`);
+  //logToFile(`Extracted variables : ${JSON.stringify(variableTypes, null, 2)}`);
 
   const variableRegex = /\b([a-zA-Z_]\w*)\b/g;
 
@@ -516,7 +532,7 @@ async function validateVariablesUsage(document: TextDocument, variableTypes: { [
       }
 
       //Ignore variables system that start by $ sign or #
-      if (match.index !== undefined && match.index > 0 && line[match.index - 1] === '$' && line[match.index - 1] === '#') continue
+      if (match.index !== undefined && match.index > 0 && (line[match.index - 1] === '$' || line[match.index - 1] === '#')) continue
 
       //Ignore functions that are declared
       if (await isFunctionDeclared(varName)) continue;
@@ -526,8 +542,8 @@ async function validateVariablesUsage(document: TextDocument, variableTypes: { [
 
       // Check if variable is declared
       if (!(varName in variableTypes)) {
-        // Mark diagnostic
-        diagnostics.push({
+
+        const newDiagnostic: Diagnostic = {
           severity: DiagnosticSeverity.Error,
           message: `Variable "${varName}" not declared.`,
           range: {
@@ -535,7 +551,12 @@ async function validateVariablesUsage(document: TextDocument, variableTypes: { [
             end: { line: lineIndex, character: match.index + varName.length }
           },
           source: 'krl-linter'
-        });
+        }
+
+        if (!isDuplicateDiagnostic(newDiagnostic, diagnostics)) {
+          diagnostics.push(newDiagnostic);
+        }
+
       }
     }
   }
@@ -543,6 +564,16 @@ async function validateVariablesUsage(document: TextDocument, variableTypes: { [
   return diagnostics;
 }
 
+function isDuplicateDiagnostic(newDiag: Diagnostic, existingDiagnostics: Diagnostic[]): boolean {
+  return existingDiagnostics.some(diag =>
+    diag.range.start.line === newDiag.range.start.line &&
+    diag.range.start.character === newDiag.range.start.character &&
+    diag.range.end.line === newDiag.range.end.line &&
+    diag.range.end.character === newDiag.range.end.character &&
+    diag.message === newDiag.message &&
+    diag.severity === newDiag.severity
+  );
+}
 
 
 

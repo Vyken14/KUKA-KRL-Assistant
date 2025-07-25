@@ -25,23 +25,28 @@ connection.onInitialize((params) => {
     //delete log file if it exists -- DEBUG ONLY
     if (fs.existsSync(logFile)) {
         fs.unlinkSync(logFile);
-        logToFile('Log file deleted on server start');
     }
-    connection.onInitialized(() => {
+    connection.onInitialized(() => __awaiter(void 0, void 0, void 0, function* () {
         if (workspaceRoot) {
-            const files = getAllDatFiles(workspaceRoot); // You must implement this (see below)
-            files.forEach((filePath) => __awaiter(void 0, void 0, void 0, function* () {
+            const files = getAllDatFiles(workspaceRoot); // Assume this gives you all .dat file paths
+            // Step 1: Collect variables from all files
+            for (const filePath of files) {
                 const content = fs.readFileSync(filePath, 'utf8');
                 const uri = vscode_uri_1.URI.file(filePath).toString();
                 const collector = new DeclaredVariableCollector();
                 collector.extractFromText(content);
                 fileVariablesMap.set(uri, collector.getVariables());
-                const mergedVariables = mergeAllVariables(fileVariablesMap);
+            }
+            // Step 2: Once all variables are collected, run validation per file
+            const mergedVariables = mergeAllVariables(fileVariablesMap);
+            for (const filePath of files) {
+                const content = fs.readFileSync(filePath, 'utf8');
+                const uri = vscode_uri_1.URI.file(filePath).toString();
                 const diagnostics = yield validateVariablesUsage(vscode_languageserver_textdocument_1.TextDocument.create(uri, 'krl', 1, content), mergedVariables);
                 connection.sendDiagnostics({ uri, diagnostics });
-            }));
+            }
         }
-    });
+    }));
     return {
         capabilities: {
             textDocumentSync: node_1.TextDocumentSyncKind.Incremental,
@@ -62,6 +67,7 @@ documents.onDidChangeContent((change) => __awaiter(void 0, void 0, void 0, funct
     const collector = new DeclaredVariableCollector();
     collector.extractFromText(document.getText());
     fileVariablesMap.set(document.uri, collector.getVariables());
+    logToFile(`New anlaysis for file: ${document.uri}`);
     const mergedVariables = mergeAllVariables(fileVariablesMap);
     const diagnostics = yield validateVariablesUsage(document, mergedVariables);
     connection.sendDiagnostics({ uri: document.uri, diagnostics });
@@ -336,12 +342,6 @@ class DeclaredVariableCollector {
                 .map(name => name.replace(/\[.*?\]/g, '').trim())
                 .map(name => name.replace(/\s*=\s*.+$/, ''))
                 .filter(name => /^[a-zA-Z_]\w*$/.test(name));
-            if (fullLine.trim() === "DECL GLOBAL INT RoutingEquipPLC[3,4],RoutingEquipPL2C[5,6]") {
-                logToFile(`🎯 Checking line: ${fullLine}`);
-                logToFile(`Type: ${type}`);
-                logToFile(`Raw varList: ${varList}`);
-                logToFile(`Extracted varNames: ${varNames.join(', ')}`);
-            }
             for (const name of varNames) {
                 if (!this.variables.has(name)) {
                     this.variables.set(name, type);
@@ -384,7 +384,7 @@ function validateVariablesUsage(document, variableTypes) {
         const diagnostics = [];
         const text = document.getText();
         const lines = text.split(/\r?\n/);
-        logToFile(`Extracted variables : ${JSON.stringify(variableTypes, null, 2)}`);
+        //logToFile(`Extracted variables : ${JSON.stringify(variableTypes, null, 2)}`);
         const variableRegex = /\b([a-zA-Z_]\w*)\b/g;
         // Keywords and types to exclude from "used variables"
         const keywords = new Set([
@@ -420,7 +420,7 @@ function validateVariablesUsage(document, variableTypes) {
                         continue;
                 }
                 //Ignore variables system that start by $ sign or #
-                if (match.index !== undefined && match.index > 0 && line[match.index - 1] === '$' && line[match.index - 1] === '#')
+                if (match.index !== undefined && match.index > 0 && (line[match.index - 1] === '$' || line[match.index - 1] === '#'))
                     continue;
                 //Ignore functions that are declared
                 if (yield isFunctionDeclared(varName))
@@ -431,7 +431,16 @@ function validateVariablesUsage(document, variableTypes) {
                 // Check if variable is declared
                 if (!(varName in variableTypes)) {
                     // Mark diagnostic
-                    diagnostics.push({
+                    // diagnostics.push({
+                    //   severity: DiagnosticSeverity.Error,
+                    //   message: `Variable "${varName}" not declared.`,
+                    //   range: {
+                    //     start: { line: lineIndex, character: match.index },
+                    //     end: { line: lineIndex, character: match.index + varName.length }
+                    //   },
+                    //   source: 'krl-linter'
+                    // });
+                    const newDiagnostic = {
                         severity: node_1.DiagnosticSeverity.Error,
                         message: `Variable "${varName}" not declared.`,
                         range: {
@@ -439,12 +448,23 @@ function validateVariablesUsage(document, variableTypes) {
                             end: { line: lineIndex, character: match.index + varName.length }
                         },
                         source: 'krl-linter'
-                    });
+                    };
+                    if (!isDuplicateDiagnostic(newDiagnostic, diagnostics)) {
+                        diagnostics.push(newDiagnostic);
+                    }
                 }
             }
         }
         return diagnostics;
     });
+}
+function isDuplicateDiagnostic(newDiag, existingDiagnostics) {
+    return existingDiagnostics.some(diag => diag.range.start.line === newDiag.range.start.line &&
+        diag.range.start.character === newDiag.range.start.character &&
+        diag.range.end.line === newDiag.range.end.line &&
+        diag.range.end.character === newDiag.range.end.character &&
+        diag.message === newDiag.message &&
+        diag.severity === newDiag.severity);
 }
 connection.listen();
 documents.listen(connection);

@@ -3,7 +3,7 @@
   "displayName": "KUKA KRL Assistant",
   "description": "Language features for KUKA KRL",
   "version": "1.2.0",
-  "publisher": "Alfred", 
+  "publisher": "Alfred",
   "repository": {
     "type": "git",
     "url": "https://github.com/Vyken14/KUKA-KRL-Assistant"
