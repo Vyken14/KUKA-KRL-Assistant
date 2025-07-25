@@ -48,7 +48,7 @@ connection.onInitialize((params: InitializeParams): InitializeResult => {
   connection.onInitialized(() => {
     if (workspaceRoot) {
       const files = getAllDatFiles(workspaceRoot); // You must implement this (see below)
-      files.forEach(filePath => {
+      files.forEach(async filePath => {
         const content = fs.readFileSync(filePath, 'utf8');
         const uri = URI.file(filePath).toString();
 
@@ -57,7 +57,7 @@ connection.onInitialize((params: InitializeParams): InitializeResult => {
         fileVariablesMap.set(uri, collector.getVariables());
 
         const mergedVariables = mergeAllVariables(fileVariablesMap);
-        const diagnostics = validateVariablesUsage(TextDocument.create(uri, 'krl', 1, content), mergedVariables);
+        const diagnostics = await validateVariablesUsage(TextDocument.create(uri, 'krl', 1, content), mergedVariables);
         connection.sendDiagnostics({ uri, diagnostics });
       });
     }
@@ -76,7 +76,7 @@ connection.onInitialize((params: InitializeParams): InitializeResult => {
 });
 
 
-documents.onDidChangeContent(change => {
+documents.onDidChangeContent(async change => {
   const { document } = change;
 
   if (document.uri.endsWith('.dat')) {
@@ -90,7 +90,7 @@ documents.onDidChangeContent(change => {
   fileVariablesMap.set(document.uri, collector.getVariables());
 
   const mergedVariables = mergeAllVariables(fileVariablesMap);
-  const diagnostics = validateVariablesUsage(document, mergedVariables);
+  const diagnostics = await validateVariablesUsage(document, mergedVariables);
   connection.sendDiagnostics({ uri: document.uri, diagnostics });
 });
 
@@ -142,7 +142,7 @@ connection.onDefinition(
     const functionName = getWordAtPosition(lineText, params.position.character);
     if (!functionName) return;
 
-    const result = await isFunctionDeclared(functionName, workspaceRoot);
+    const result = await isFunctionDeclared(functionName);
     if (!result) return;
 
     return Location.create(result.uri, {
@@ -181,7 +181,7 @@ connection.onHover(async (params) => {
   const functionName = getWordAtPosition(lineText, params.position.character);
   if (!functionName) return;
 
-  const result = await isFunctionDeclared(functionName, workspaceRoot);
+  const result = await isFunctionDeclared(functionName);
   if (!result) return;
 
   return {
@@ -215,8 +215,9 @@ interface FunctionDeclaration {
   params: string;
 }
 
-async function isFunctionDeclared(name: string, root: string): Promise<FunctionDeclaration | undefined> {
-  const files = await findSrcFiles(root);
+async function isFunctionDeclared(name: string): Promise<FunctionDeclaration | undefined> {
+  if (!workspaceRoot) return undefined;
+  const files = await findSrcFiles(workspaceRoot);
   const defRegex = new RegExp(`\\b(GLOBAL\\s+)?(DEF|DEFFCT)\\s+(\\w+\\s+)?${name}\\s*\\(([^)]*)\\)`, 'i');
 
   for (const filePath of files) {
@@ -445,7 +446,7 @@ class DeclaredVariableCollector {
   }
 }
 
-function validateVariablesUsage(document: TextDocument, variableTypes: { [varName: string]: string }): Diagnostic[] {
+async function validateVariablesUsage(document: TextDocument, variableTypes: { [varName: string]: string }): Promise<Diagnostic[]> {
   const diagnostics: Diagnostic[] = [];
   const text = document.getText();
   const lines = text.split(/\r?\n/);
@@ -494,6 +495,9 @@ function validateVariablesUsage(document: TextDocument, variableTypes: { [varNam
 
       //Ignore variables system that start by $ sign or #
       if (match.index !== undefined && match.index > 0 && line[match.index - 1] === '$' && line[match.index - 1] === '#') continue
+
+      //Ignore functions that are declared
+      if (await isFunctionDeclared(varName)) continue;
 
       // Ignore keywords and known types
       if (keywords.has(varName.toUpperCase())) continue;
