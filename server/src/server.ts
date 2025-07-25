@@ -37,6 +37,14 @@ connection.onInitialize((params: InitializeParams): InitializeResult => {
 
   documents.listen(connection);
 
+  //delete log file if it exists -- DEBUG ONLY
+  if (fs.existsSync(logFile)) {
+    fs.unlinkSync(logFile);
+    logToFile('Log file deleted on server start');
+  }
+
+
+
   connection.onInitialized(() => {
     if (workspaceRoot) {
       const files = getAllDatFiles(workspaceRoot); // You must implement this (see below)
@@ -114,12 +122,6 @@ function getAllDatFiles(dir: string): string[] {
   recurse(dir);
   return result;
 }
-
-
-
-documents.onDidOpen(e => {
-  console.log(`Opened: ${e.document.uri}`);
-});
 
 const logFile = path.join(__dirname, 'krl-server.log');
 
@@ -373,7 +375,7 @@ function parseKrlFile(datContent: string): void {
     );
 
     structDefinitions[structName] = filtered;
-    logToFile(`Cleaned struct "${structName}" with valid variables: ${filtered.join(', ')}`);
+    //logToFile(`Cleaned struct "${structName}" with valid variables: ${filtered.join(', ')}`);
   }
 }
 
@@ -413,7 +415,7 @@ connection.onCompletion((params: TextDocumentPositionParams): CompletionItem[] =
   const varName = match[1];
   const structName = variableStructTypes[varName];
 
-  logToFile(`Available structDefinitions: ${JSON.stringify(structDefinitions, null, 2)}`);
+  //logToFile(`Available structDefinitions: ${JSON.stringify(structDefinitions, null, 2)}`);
 
   if (!structName) return [];
   const members = structDefinitions[structName];  
@@ -476,7 +478,7 @@ function validateVariablesUsage(document: TextDocument, variableTypes: { [varNam
   const lines = text.split(/\r?\n/);
 
   const collector = new DeclaredVariableCollector();
-  logToFile(`Extracted variables : ${JSON.stringify(variableTypes, null, 2)}`);
+  //logToFile(`Extracted variables : ${JSON.stringify(variableTypes, null, 2)}`);
 
   // Regex to match possible variable names: words (letters, digits, underscore)
   // Adjust if your variable naming rules differ
@@ -490,9 +492,8 @@ function validateVariablesUsage(document: TextDocument, variableTypes: { [varNam
     'CASE', 'DEFAULT', 'SWITCH', 'ENDSWITCH','BREAK','ABS', 'SIN', 'COS', 'TAN', 'ASIN', 'ACOS',
     'DEFDAT','ENDDAT','PUBLIC','STRUC','WHEN','DISTANCE','DO','DELAY', 'PRIO', 'LIN', 'PTP','DELAY',
     'C_PTP', 'C_LIN', 'C_VEL', 'C_DIS','BAS','LOAD', 'FRAME','IN','OUT',
-    'X', 'Y', 'Z', 'A', 'B', 'C','S','T','E1','E2','E3','E4','E5','E6',
-    'SQRT','TO',
-    'Axis','E6AXIS','E6POS'
+    'X', 'Y', 'Z', 'A', 'B', 'C','S','T','A1','A2','A3','A4','A5','A6','E1','E2','E3','E4','E5','E6',
+    'SQRT','TO','Axis','E6AXIS','E6POS'
   ]);
 
   for (let lineIndex = 0; lineIndex < lines.length; lineIndex++) {
@@ -518,6 +519,9 @@ function validateVariablesUsage(document: TextDocument, variableTypes: { [varNam
       if (paramIndex !== -1) {
         if (match.index >= paramIndex) continue; 
       }
+
+      //Ignore variables system that start by $ sign
+      if (match.index !== undefined && match.index > 0 && line[match.index - 1] === '$') continue
 
       // Ignore keywords and known types
       if (keywords.has(varName.toUpperCase())) continue;
