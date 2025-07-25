@@ -1,4 +1,27 @@
 "use strict";
+var __createBinding = (this && this.__createBinding) || (Object.create ? (function(o, m, k, k2) {
+    if (k2 === undefined) k2 = k;
+    var desc = Object.getOwnPropertyDescriptor(m, k);
+    if (!desc || ("get" in desc ? !m.__esModule : desc.writable || desc.configurable)) {
+      desc = { enumerable: true, get: function() { return m[k]; } };
+    }
+    Object.defineProperty(o, k2, desc);
+}) : (function(o, m, k, k2) {
+    if (k2 === undefined) k2 = k;
+    o[k2] = m[k];
+}));
+var __setModuleDefault = (this && this.__setModuleDefault) || (Object.create ? (function(o, v) {
+    Object.defineProperty(o, "default", { enumerable: true, value: v });
+}) : function(o, v) {
+    o["default"] = v;
+});
+var __importStar = (this && this.__importStar) || function (mod) {
+    if (mod && mod.__esModule) return mod;
+    var result = {};
+    if (mod != null) for (var k in mod) if (k !== "default" && Object.prototype.hasOwnProperty.call(mod, k)) __createBinding(result, mod, k);
+    __setModuleDefault(result, mod);
+    return result;
+};
 var __awaiter = (this && this.__awaiter) || function (thisArg, _arguments, P, generator) {
     function adopt(value) { return value instanceof P ? value : new P(function (resolve) { resolve(value); }); }
     return new (P || (P = Promise))(function (resolve, reject) {
@@ -9,12 +32,12 @@ var __awaiter = (this && this.__awaiter) || function (thisArg, _arguments, P, ge
     });
 };
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.validateAllDatFiles = void 0;
 const node_1 = require("vscode-languageserver/node");
 const vscode_languageserver_textdocument_1 = require("vscode-languageserver-textdocument");
-const fs = require("fs");
-const path = require("path");
+const fs = __importStar(require("fs"));
+const path = __importStar(require("path"));
 const vscode_uri_1 = require("vscode-uri");
+const worker_threads_1 = require("worker_threads");
 const connection = (0, node_1.createConnection)(node_1.ProposedFeatures.all);
 const documents = new node_1.TextDocuments(vscode_languageserver_textdocument_1.TextDocument);
 let workspaceRoot = null;
@@ -22,65 +45,71 @@ const fileVariablesMap = new Map();
 connection.onInitialize((params) => {
     workspaceRoot = params.rootUri ? vscode_uri_1.URI.parse(params.rootUri).fsPath : null;
     documents.listen(connection);
-    //delete log file if it exists -- DEBUG ONLY
+    // DEBUG: delete old log file
     if (fs.existsSync(logFile)) {
         fs.unlinkSync(logFile);
     }
-    connection.onInitialized(() => __awaiter(void 0, void 0, void 0, function* () {
-        if (workspaceRoot) {
-            const files = getAllDatFiles(workspaceRoot); // Assume this gives you all .dat file paths
-            // Step 1: Collect variables from all files
-            for (const filePath of files) {
-                const content = fs.readFileSync(filePath, 'utf8');
-                const uri = vscode_uri_1.URI.file(filePath).toString();
-                const collector = new DeclaredVariableCollector();
-                collector.extractFromText(content);
-                fileVariablesMap.set(uri, collector.getVariables());
-            }
-            // Step 2: Once all variables are collected, run validation per file
-            const mergedVariables = mergeAllVariables(fileVariablesMap);
-            for (const filePath of files) {
-                const content = fs.readFileSync(filePath, 'utf8');
-                const uri = vscode_uri_1.URI.file(filePath).toString();
-                const diagnostics = yield validateVariablesUsage(vscode_languageserver_textdocument_1.TextDocument.create(uri, 'krl', 1, content), mergedVariables);
-                connection.sendDiagnostics({ uri, diagnostics });
-            }
-        }
-    }));
     return {
         capabilities: {
             textDocumentSync: node_1.TextDocumentSyncKind.Incremental,
             definitionProvider: true,
             hoverProvider: true,
             completionProvider: {
-                triggerCharacters: ['.']
-            }
-        }
+                triggerCharacters: ['.'],
+            },
+        },
     };
 });
-documents.onDidChangeContent((change) => __awaiter(void 0, void 0, void 0, function* () {
-    const { document } = change;
-    if (document.uri.endsWith('.dat')) {
-        validateDatFile(document, connection);
+connection.onInitialized(() => {
+    if (workspaceRoot) {
+        const files = getAllDatFiles(workspaceRoot);
+        processFilesInWorker(files, (result) => {
+            result.forEach(({ uri, diagnostics }) => {
+                connection.sendDiagnostics({ uri, diagnostics });
+            });
+        });
     }
-    parseKrlFile(document.getText());
-    const collector = new DeclaredVariableCollector();
-    collector.extractFromText(document.getText());
-    fileVariablesMap.set(document.uri, collector.getVariables());
-    logToFile(`New anlaysis for file: ${document.uri}`);
-    const mergedVariables = mergeAllVariables(fileVariablesMap);
-    const diagnostics = yield validateVariablesUsage(document, mergedVariables);
-    connection.sendDiagnostics({ uri: document.uri, diagnostics });
-}));
-function mergeAllVariables(map) {
-    const result = {};
-    for (const vars of map.values()) {
-        for (const v of vars) {
-            result[v.name] = v.type || '';
+});
+function processFilesInWorker(files, callback) {
+    logToFile(`Processing files in worker serverside: ${files.join(', ')}`);
+    const worker = new worker_threads_1.Worker(path.resolve(__dirname, 'worker.ts'), {
+        workerData: { files },
+    });
+    // logToFile(`Processing files in worker: ${files.join(', ')}`);
+    // logToFile(`Worker at ${path.resolve(__dirname, 'worker.ts')}`);
+    worker.on('error', err => {
+        console.error('Worker error:', err);
+    });
+    worker.on('exit', code => {
+        if (code !== 0)
+            console.error(`Worker stopped with exit code ${code}`);
+    });
+    worker.on('message', (diagnosticsList) => {
+        connection.console.log('Received diagnostics from worker');
+        for (const { uri, diagnostics } of diagnosticsList) {
+            connection.sendDiagnostics({ uri, diagnostics });
         }
-    }
-    return result;
+    });
 }
+// On document content change: trigger validation in worker
+documents.onDidChangeContent((change) => __awaiter(void 0, void 0, void 0, function* () {
+    try {
+        const { document } = change;
+        if (document.uri.endsWith('.dat')) {
+            validateDatFile(document, connection);
+        }
+        // Use the worker for heavy validation to avoid blocking
+        processFilesInWorker([vscode_uri_1.URI.parse(document.uri).fsPath], (result) => {
+            result.forEach(({ uri, diagnostics }) => {
+                connection.sendDiagnostics({ uri, diagnostics });
+            });
+        });
+    }
+    catch (err) {
+        logToFile(`Error during onDidChangeContent: ${String(err)}`);
+    }
+}));
+// Recursively find all .dat files under directory
 function getAllDatFiles(dir) {
     const result = [];
     function recurse(currentDir) {
@@ -102,65 +131,41 @@ const logFile = path.join(__dirname, 'krl-server.log');
 function logToFile(message) {
     fs.appendFileSync(logFile, `[${new Date().toISOString()}] ${message}\n`);
 }
-connection.onDefinition((params) => __awaiter(void 0, void 0, void 0, function* () {
-    const doc = documents.get(params.textDocument.uri);
-    if (!doc || !workspaceRoot)
-        return;
-    const lines = doc.getText().split(/\r?\n/);
-    const lineText = lines[params.position.line];
-    if (/^\s*(GLOBAL\s+)?(DEF|DEFFCT|DECL|SIGNAL|STRUC)\b/i.test(lineText))
-        return;
-    const functionName = getWordAtPosition(lineText, params.position.character);
-    if (!functionName)
-        return;
-    const result = yield isFunctionDeclared(functionName);
-    if (!result)
-        return;
-    return node_1.Location.create(result.uri, {
-        start: node_1.Position.create(result.line, result.startChar),
-        end: node_1.Position.create(result.line, result.endChar)
-    });
-}));
-// Utility: Recursively find .src .dat files in workspace
-function findSrcFiles(dir) {
-    return __awaiter(this, void 0, void 0, function* () {
-        let results = [];
-        const list = fs.readdirSync(dir);
-        for (const file of list) {
-            const filePath = path.join(dir, file);
-            const stat = fs.statSync(filePath);
-            if (stat && stat.isDirectory()) {
-                const subDirFiles = yield findSrcFiles(filePath);
-                results = results.concat(subDirFiles);
-            }
-            else if (file.toLowerCase().endsWith('.src') || file.toLowerCase().endsWith('.dat') || file.toLowerCase().endsWith('.sub')) {
-                results.push(filePath);
-            }
+// Validate .dat file global declarations (from your original code)
+function validateDatFile(document, connection) {
+    const diagnostics = [];
+    const text = document.getText();
+    const lines = text.split(/\r?\n/);
+    let insidePublicDefdat = false;
+    for (let i = 0; i < lines.length; i++) {
+        const line = lines[i].trim();
+        // Detect start of PUBLIC DEFDAT
+        const defdatMatch = line.match(/^DEFDAT\s+\w+\s+PUBLIC/i);
+        if (defdatMatch) {
+            insidePublicDefdat = true;
+            continue;
         }
-        return results;
-    });
+        // End of PUBLIC DEFDAT block
+        if (/^DEFDAT\s+\w+/i.test(line) && !/PUBLIC/i.test(line)) {
+            insidePublicDefdat = false;
+        }
+        // Look for global declarations outside PUBLIC DEFDAT
+        if (/^(DECL|SIGNAL|STRUC)/i.test(line) && !insidePublicDefdat) {
+            const newDiagnostic = {
+                severity: node_1.DiagnosticSeverity.Error,
+                range: {
+                    start: { line: i, character: 0 },
+                    end: { line: i, character: line.length },
+                },
+                message: `Global declaration "${line.split(/\s+/)[0]}" is not inside a PUBLIC DEFDAT.`,
+                source: 'krl-linter',
+            };
+            diagnostics.push(newDiagnostic);
+        }
+    }
+    connection.sendDiagnostics({ uri: document.uri, diagnostics });
 }
-connection.onHover((params) => __awaiter(void 0, void 0, void 0, function* () {
-    const doc = documents.get(params.textDocument.uri);
-    if (!doc || !workspaceRoot)
-        return;
-    const lines = doc.getText().split(/\r?\n/);
-    const lineText = lines[params.position.line];
-    if (/^\s*(GLOBAL\s+)?(DEF|DEFFCT|DECL|SIGNAL|STRUC)\b/i.test(lineText))
-        return;
-    const functionName = getWordAtPosition(lineText, params.position.character);
-    if (!functionName)
-        return;
-    const result = yield isFunctionDeclared(functionName);
-    if (!result)
-        return;
-    return {
-        contents: {
-            kind: 'markdown',
-            value: `**${functionName}**(${result.params})`
-        }
-    };
-}));
+// Function to find the word at a position, used for definition/hover
 function getWordAtPosition(lineText, character) {
     const wordMatch = lineText.match(/\b(\w+)\b/g);
     if (!wordMatch)
@@ -176,6 +181,7 @@ function getWordAtPosition(lineText, character) {
     }
     return;
 }
+// You had this async function to find if a function is declared
 function isFunctionDeclared(name) {
     return __awaiter(this, void 0, void 0, function* () {
         if (!workspaceRoot)
@@ -196,7 +202,7 @@ function isFunctionDeclared(name) {
                         line: i,
                         startChar,
                         endChar: startChar + name.length,
-                        params: match[4].trim()
+                        params: match[4].trim(),
                     };
                 }
             }
@@ -204,98 +210,75 @@ function isFunctionDeclared(name) {
         return undefined;
     });
 }
-// Call this once during initialization
-function validateAllDatFiles(connection) {
-    documents.all().forEach(document => {
-        if (document.uri.endsWith('.dat')) {
-            validateDatFile(document, connection);
+// Recursive find of .src, .dat, .sub files
+function findSrcFiles(dir) {
+    return __awaiter(this, void 0, void 0, function* () {
+        let results = [];
+        const list = fs.readdirSync(dir);
+        for (const file of list) {
+            const filePath = path.join(dir, file);
+            const stat = fs.statSync(filePath);
+            if (stat && stat.isDirectory()) {
+                const subDirFiles = yield findSrcFiles(filePath);
+                results = results.concat(subDirFiles);
+            }
+            else if (file.toLowerCase().endsWith('.src') || file.toLowerCase().endsWith('.dat') || file.toLowerCase().endsWith('.sub')) {
+                results.push(filePath);
+            }
         }
+        return results;
     });
 }
-exports.validateAllDatFiles = validateAllDatFiles;
-function validateDatFile(document, connection) {
-    const diagnostics = [];
-    const text = document.getText();
-    const lines = text.split(/\r?\n/);
-    let insidePublicDefdat = false;
-    for (let i = 0; i < lines.length; i++) {
-        const line = lines[i].trim();
-        // Detect start of PUBLIC DEFDAT
-        const defdatMatch = line.match(/^DEFDAT\s+\w+\s+PUBLIC/i);
-        if (defdatMatch) {
-            insidePublicDefdat = true;
-            continue;
-        }
-        // If we hit the end of the file or a new DEFDAT without PUBLIC, exit the public block
-        if (/^DEFDAT\s+\w+/i.test(line) && !/PUBLIC/i.test(line)) {
-            insidePublicDefdat = false;
-        }
-        // Look for global declarations
-        if (/^(DECL|SIGNAL|STRUC)/i.test(line) && !insidePublicDefdat) {
-            diagnostics.push({
-                severity: node_1.DiagnosticSeverity.Error,
-                range: {
-                    start: { line: i, character: 0 },
-                    end: { line: i, character: line.length }
-                },
-                message: `Global declaration "${line.split(/\s+/)[0]}" is not inside a PUBLIC DEFDAT.`,
-                source: 'krl-linter'
-            });
-        }
-    }
-    connection.sendDiagnostics({ uri: document.uri, diagnostics });
-}
-let variableStructTypes = {};
-let structDefinitions = {};
-function parseKrlFile(datContent) {
-    const structRegex = /^GLOBAL\s+STRUC\s+(\w+)\s+(.+)$/gm;
-    const knownTypes = ['INT', 'REAL', 'BOOL', 'CHAR', 'STRING'];
-    let match;
-    const tempStructDefinitions = {};
-    // Step 1: Parse all GLOBAL STRUC blocks
-    while ((match = structRegex.exec(datContent)) !== null) {
-        const structName = match[1];
-        const membersRaw = match[2];
-        const members = [];
-        // Match known types and their variable lists
-        const typeRegex = /\b(?:INT|REAL|BOOL|CHAR|STRING)\s+([\w,\s]+)/g;
-        let typeMatch;
-        while ((typeMatch = typeRegex.exec(membersRaw)) !== null) {
-            const vars = typeMatch[1]
-                .replace("INT", '')
-                .replace("REAL", '')
-                .replace("BOOL", '')
-                .replace("CHAR", '')
-                .replace("STRING", '')
-                .split(',')
-                .map(v => v.trim())
-                .filter(v => v.length > 0);
-            members.push(...vars);
-        }
-        // Match any remaining tokens not part of known types
-        const allVarsRaw = membersRaw.split(/[, ]+/).filter(Boolean);
-        const extraMembers = allVarsRaw.filter(token => !members.includes(token) &&
-            !knownTypes.includes(token));
-        members.push(...extraMembers);
-        tempStructDefinitions[structName] = members;
-        // logToFile(`Parsed struct "${structName}" with raw members: ${members.join(', ')}`);
-    }
-    // Step 2: Remove custom types used as variable names
-    for (const [structName, members] of Object.entries(tempStructDefinitions)) {
-        const filtered = members.filter(member => !knownTypes.includes(member) && // Not a known type
-            !Object.keys(tempStructDefinitions).includes(member) // Not a custom struct
-        );
-        structDefinitions[structName] = filtered;
-        //logToFile(`Cleaned struct "${structName}" with valid variables: ${filtered.join(', ')}`);
-    }
-}
+// Definition provider
+connection.onDefinition((params) => __awaiter(void 0, void 0, void 0, function* () {
+    const doc = documents.get(params.textDocument.uri);
+    if (!doc || !workspaceRoot)
+        return;
+    const lines = doc.getText().split(/\r?\n/);
+    const lineText = lines[params.position.line];
+    if (/^\s*(GLOBAL\s+)?(DEF|DEFFCT|DECL|SIGNAL|STRUC)\b/i.test(lineText))
+        return;
+    const functionName = getWordAtPosition(lineText, params.position.character);
+    if (!functionName)
+        return;
+    const result = yield isFunctionDeclared(functionName);
+    if (!result)
+        return;
+    return node_1.Location.create(result.uri, {
+        start: node_1.Position.create(result.line, result.startChar),
+        end: node_1.Position.create(result.line, result.endChar),
+    });
+}));
+// Hover provider
+connection.onHover((params) => __awaiter(void 0, void 0, void 0, function* () {
+    const doc = documents.get(params.textDocument.uri);
+    if (!doc || !workspaceRoot)
+        return;
+    const lines = doc.getText().split(/\r?\n/);
+    const lineText = lines[params.position.line];
+    if (/^\s*(GLOBAL\s+)?(DEF|DEFFCT|DECL|SIGNAL|STRUC)\b/i.test(lineText))
+        return;
+    const functionName = getWordAtPosition(lineText, params.position.character);
+    if (!functionName)
+        return;
+    const result = yield isFunctionDeclared(functionName);
+    if (!result)
+        return;
+    return {
+        contents: {
+            kind: 'markdown',
+            value: `**${functionName}**(${result.params})`,
+        },
+    };
+}));
+// Completion provider
 connection.onCompletion((params) => {
     const document = documents.get(params.textDocument.uri);
     if (!document)
         return [];
     const lines = document.getText().split(/\r?\n/);
-    // Step 1: Scan document and build variableStructTypes
-    variableStructTypes = {}; // reset
+    // Scan document to build variableStructTypes
+    const variableStructTypes = {};
     for (const line of lines) {
         const cleanedLine = line.trim().replace(/^GLOBAL\s+DECL\s+/i, '');
         const parts = cleanedLine.split(/\s+/);
@@ -304,7 +287,7 @@ connection.onCompletion((params) => {
             variableStructTypes[varName] = type;
         }
     }
-    // Step 2: Get text before cursor
+    // Get text before cursor
     const line = lines[params.position.line];
     const textBefore = line.substring(0, params.position.character);
     const match = textBefore.match(/(\w+)\.$/);
@@ -312,160 +295,20 @@ connection.onCompletion((params) => {
         return [];
     const varName = match[1];
     const structName = variableStructTypes[varName];
-    //logToFile(`Available structDefinitions: ${JSON.stringify(structDefinitions, null, 2)}`);
     if (!structName)
         return [];
+    // Use structDefinitions parsed elsewhere or implement parsing here if needed
+    // For now, returning empty array (you can import or implement parseKrlFile here if you want)
+    // Example stub:
+    const structDefinitions = {};
     const members = structDefinitions[structName];
     if (!members)
         return [];
     return members.map(member => ({
         label: member,
-        kind: node_1.CompletionItemKind.Field
+        kind: node_1.CompletionItemKind.Field,
     }));
 });
-class DeclaredVariableCollector {
-    constructor() {
-        this.variables = new Map(); // name -> type
-    }
-    extractFromText(documentText) {
-        // Remove STRUC blocks (non-greedy match)
-        const textWithoutStrucs = documentText.replace(/STRUC\s+\w+[^]*?ENDSTRUC/gi, '');
-        // Match DECL statements with optional GLOBAL before or after
-        const declRegex = /^\s*(GLOBAL\s+)?DECL\s+(GLOBAL\s+)?(\w+)\s+([^\r\n;]+)/gim;
-        let match;
-        while ((match = declRegex.exec(textWithoutStrucs)) !== null) {
-            const fullLine = match[0];
-            const type = match[3];
-            const varList = match[4];
-            const varNames = splitVarsRespectingBrackets(varList)
-                .map(name => name.trim())
-                .map(name => name.replace(/\[.*?\]/g, '').trim())
-                .map(name => name.replace(/\s*=\s*.+$/, ''))
-                .filter(name => /^[a-zA-Z_]\w*$/.test(name));
-            for (const name of varNames) {
-                if (!this.variables.has(name)) {
-                    this.variables.set(name, type);
-                }
-            }
-        }
-    }
-    getVariables() {
-        return Array.from(this.variables.entries()).map(([name, type]) => ({ name, type }));
-    }
-    clear() {
-        this.variables.clear();
-    }
-}
-//Handle variables that contains brackets with commas
-const splitVarsRespectingBrackets = (input) => {
-    const result = [];
-    let current = '';
-    let bracketDepth = 0;
-    for (let i = 0; i < input.length; i++) {
-        const char = input[i];
-        if (char === '[')
-            bracketDepth++;
-        if (char === ']')
-            bracketDepth--;
-        if (char === ',' && bracketDepth === 0) {
-            result.push(current.trim());
-            current = '';
-        }
-        else {
-            current += char;
-        }
-    }
-    if (current)
-        result.push(current.trim());
-    return result;
-};
-function validateVariablesUsage(document, variableTypes) {
-    return __awaiter(this, void 0, void 0, function* () {
-        const diagnostics = [];
-        const text = document.getText();
-        const lines = text.split(/\r?\n/);
-        //logToFile(`Extracted variables : ${JSON.stringify(variableTypes, null, 2)}`);
-        const variableRegex = /\b([a-zA-Z_]\w*)\b/g;
-        // Keywords and types to exclude from "used variables"
-        const keywords = new Set([
-            'GLOBAL', 'DEF', 'DEFFCT', 'END', 'ENDFCT', 'RETURN', 'TRIGGER',
-            'REAL', 'BOOL', 'DECL', 'IF', 'ELSE', 'ENDIF', 'CONTINUE', 'FOR', 'ENDFOR', 'WHILE',
-            'AND', 'OR', 'NOT', 'TRUE', 'FALSE', 'INT', 'STRING', 'PULSE', 'WAIT', 'SEC', 'NULLFRAME', 'THEN',
-            'CASE', 'DEFAULT', 'SWITCH', 'ENDSWITCH', 'BREAK', 'ABS', 'SIN', 'COS', 'TAN', 'ASIN', 'ACOS', 'ATAN2', 'MAX', 'MIN',
-            'DEFDAT', 'ENDDAT', 'PUBLIC', 'STRUC', 'WHEN', 'DISTANCE', 'DO', 'DELAY', 'PRIO', 'LIN', 'PTP', 'DELAY',
-            'C_PTP', 'C_LIN', 'C_VEL', 'C_DIS', 'BAS', 'LOAD', 'FRAME', 'IN', 'OUT',
-            'X', 'Y', 'Z', 'A', 'B', 'C', 'S', 'T', 'A1', 'A2', 'A3', 'A4', 'A5', 'A6', 'E1', 'E2', 'E3', 'E4', 'E5', 'E6',
-            'SQRT', 'TO', 'Axis', 'E6AXIS', 'E6POS', 'LOAD_DATA', 'BASE', 'TOOL',
-            'INVERSE', 'FORWARD', 'B_AND', 'B_OR', 'B_NOT', 'B_XOR', 'B_NAND', 'B_NOR', 'B_XNOR',
-        ]);
-        for (let lineIndex = 0; lineIndex < lines.length; lineIndex++) {
-            const line = lines[lineIndex];
-            // Skip lines that declare variables or structs or signals
-            if (/^\s*(GLOBAL\s+)?(DECL|STRUC|SIGNAL)\b/i.test(line)) {
-                continue;
-            }
-            let match;
-            while ((match = variableRegex.exec(line)) !== null) {
-                const varName = match[1];
-                //if a line as comment ; then skip everything after the ;
-                const commentIndex = line.indexOf(';');
-                if (commentIndex !== -1) {
-                    if (match.index >= commentIndex)
-                        continue;
-                }
-                //if a line as param & then skip everything after the &
-                const paramIndex = line.indexOf('&');
-                if (paramIndex !== -1) {
-                    if (match.index >= paramIndex)
-                        continue;
-                }
-                //Ignore variables system that start by $ sign or #
-                if (match.index !== undefined && match.index > 0 && (line[match.index - 1] === '$' || line[match.index - 1] === '#'))
-                    continue;
-                //Ignore functions that are declared
-                if (yield isFunctionDeclared(varName))
-                    continue;
-                // Ignore keywords and known types
-                if (keywords.has(varName.toUpperCase()))
-                    continue;
-                // Check if variable is declared
-                if (!(varName in variableTypes)) {
-                    // Mark diagnostic
-                    // diagnostics.push({
-                    //   severity: DiagnosticSeverity.Error,
-                    //   message: `Variable "${varName}" not declared.`,
-                    //   range: {
-                    //     start: { line: lineIndex, character: match.index },
-                    //     end: { line: lineIndex, character: match.index + varName.length }
-                    //   },
-                    //   source: 'krl-linter'
-                    // });
-                    const newDiagnostic = {
-                        severity: node_1.DiagnosticSeverity.Error,
-                        message: `Variable "${varName}" not declared.`,
-                        range: {
-                            start: { line: lineIndex, character: match.index },
-                            end: { line: lineIndex, character: match.index + varName.length }
-                        },
-                        source: 'krl-linter'
-                    };
-                    if (!isDuplicateDiagnostic(newDiagnostic, diagnostics)) {
-                        diagnostics.push(newDiagnostic);
-                    }
-                }
-            }
-        }
-        return diagnostics;
-    });
-}
-function isDuplicateDiagnostic(newDiag, existingDiagnostics) {
-    return existingDiagnostics.some(diag => diag.range.start.line === newDiag.range.start.line &&
-        diag.range.start.character === newDiag.range.start.character &&
-        diag.range.end.line === newDiag.range.end.line &&
-        diag.range.end.character === newDiag.range.end.character &&
-        diag.message === newDiag.message &&
-        diag.severity === newDiag.severity);
-}
 connection.listen();
 documents.listen(connection);
 //# sourceMappingURL=server.js.map
