@@ -25,6 +25,7 @@ const logFile = path.join(__dirname, 'krl-server.log');
 // Variables and struct maps (updated dynamically)
 let variableStructTypes = {};
 let structDefinitions = {};
+let functionsDeclared = [];
 // =======================
 // Initialization Handlers
 // =======================
@@ -57,10 +58,12 @@ connection.onInitialized(() => __awaiter(void 0, void 0, void 0, function* () {
         const collector = new DeclaredVariableCollector();
         collector.extractFromText(content);
         fileVariablesMap.set(uri, collector.getVariables());
+        functionsDeclared = yield getAllFunctionDeclarations();
+        logToFile(`Extracted functions from : ${JSON.stringify(functionsDeclared, null, 2)}`);
     }
     // Step 2: Merge and log variables for all files
     const mergedVariables = mergeAllVariables(fileVariablesMap);
-    logToFile(`Merged variables: ${JSON.stringify(mergedVariables, null, 2)}`);
+    //logToFile(`Merged variables: ${JSON.stringify(mergedVariables, null, 2)}`);
     // Step 3: Optionally validate each file with merged variables (commented out)
     for (const filePath of files) {
         const content = fs.readFileSync(filePath, 'utf8');
@@ -184,8 +187,8 @@ connection.onCompletion((params) => __awaiter(void 0, void 0, void 0, function* 
     if (!document)
         return [];
     const lines = document.getText().split(/\r?\n/);
-    // Build variableStructTypes for this document
-    variableStructTypes = {};
+    // === 1. Struct field completions (unchanged) ===
+    const variableStructTypes = {};
     for (const line of lines) {
         const declRegex = /^(?:GLOBAL\s+)?(?:DECL\s+)?(?:GLOBAL\s+)?(\w+)\s+(\w+)/i;
         const match = declRegex.exec(line.trim());
@@ -195,24 +198,70 @@ connection.onCompletion((params) => __awaiter(void 0, void 0, void 0, function* 
             variableStructTypes[varName] = type;
         }
     }
-    // Parse text before cursor for varName before a dot
     const line = lines[params.position.line];
     const textBefore = line.substring(0, params.position.character);
-    const match = textBefore.match(/(\w+)\.$/);
-    if (!match)
-        return [];
-    const varName = match[1];
-    const structName = variableStructTypes[varName];
-    if (!structName)
-        return [];
-    const members = structDefinitions[structName];
-    if (!members)
-        return [];
-    return members.map(member => ({
-        label: member,
-        kind: node_1.CompletionItemKind.Field
-    }));
+    const dotMatch = textBefore.match(/(\w+)\.$/);
+    const structItems = [];
+    if (dotMatch) {
+        const varName = dotMatch[1];
+        const structName = variableStructTypes[varName];
+        const members = structDefinitions[structName];
+        if (members) {
+            structItems.push(...members.map(member => ({
+                label: member,
+                kind: node_1.CompletionItemKind.Field
+            })));
+        }
+    }
+    // === 2. Function completions ===
+    logToFile(`Extracted functions: ${JSON.stringify(functionsDeclared, null, 2)}`);
+    const functionItems = functionsDeclared.map(fn => {
+        const paramList = fn.params.split(',').map(p => p.trim()).filter(Boolean);
+        const snippetParams = paramList.map((p, i) => `\${${i + 1}:${p}}`).join(', ');
+        return {
+            label: fn.name,
+            kind: node_1.CompletionItemKind.Function,
+            detail: `${fn.name}(${fn.params})`,
+            insertText: `${fn.name}(${snippetParams})`,
+            insertTextFormat: node_1.InsertTextFormat.Snippet,
+            documentation: `User-defined function: ${fn.name}`
+        };
+    });
+    // === 3. Return all completions combined ===
+    return [...structItems, ...functionItems];
 }));
+function getAllFunctionDeclarations() {
+    return __awaiter(this, void 0, void 0, function* () {
+        if (!workspaceRoot)
+            return [];
+        const files = yield findSrcFiles(workspaceRoot);
+        const defRegex = /\b(GLOBAL\s+)?(DEF|DEFFCT)\s+(?:\w+\s+)?(\w+)\s*\(([^)]*)\)/i;
+        const allDeclarations = [];
+        for (const filePath of files) {
+            const content = fs.readFileSync(filePath, 'utf8');
+            const fileLines = content.split(/\r?\n/);
+            for (let i = 0; i < fileLines.length; i++) {
+                const line = fileLines[i];
+                const match = defRegex.exec(line);
+                if (match) {
+                    const name = match[3];
+                    const params = match[4].trim();
+                    const startChar = line.indexOf(name);
+                    const uri = vscode_uri_1.URI.file(filePath).toString();
+                    allDeclarations.push({
+                        name,
+                        uri,
+                        line: i,
+                        startChar,
+                        endChar: startChar + name.length,
+                        params,
+                    });
+                }
+            }
+        }
+        return allDeclarations;
+    });
+}
 // =========================
 // Utility Functions
 // =========================
@@ -280,7 +329,8 @@ function isFunctionDeclared(name) {
                         line: i,
                         startChar,
                         endChar: startChar + name.length,
-                        params: match[4].trim()
+                        params: match[4].trim(),
+                        name: name
                     };
                 }
             }
