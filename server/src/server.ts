@@ -129,8 +129,6 @@ function logToFile(message: string) {
   fs.appendFileSync(logFile, `[${new Date().toISOString()}] ${message}\n`);
 }
 
-
-
 connection.onDefinition(
   async (params: DefinitionParams): Promise<Location | undefined> => {
     const doc = documents.get(params.textDocument.uri);
@@ -138,54 +136,22 @@ connection.onDefinition(
 
     const lines = doc.getText().split(/\r?\n/);
     const lineText = lines[params.position.line];
-    
-  //Do nothing if we already are on the Decl line
-  if (/^\s*(GLOBAL\s+)?(DEF|DEFFCT)\b/i.test(lineText)) return undefined;
-  if (/^\s*(DECL|SIGNAL|STRUC)\b/i.test(lineText)) return;
 
-    // Match function name under the cursor
-    const wordMatch = lineText.match(/\b(\w+)\b/g);
-    if (!wordMatch) return;
+    if (/^\s*(GLOBAL\s+)?(DEF|DEFFCT|DECL|SIGNAL|STRUC)\b/i.test(lineText)) return;
 
-    let functionName: string | undefined;
-    let charCount = 0;
-    for (const w of wordMatch) {
-      const start = lineText.indexOf(w, charCount);
-      const end = start + w.length;
-      if (params.position.character >= start && params.position.character <= end) {
-        functionName = w;
-        break;
-      }
-      charCount = end;
-    }
+    const functionName = getWordAtPosition(lineText, params.position.character);
     if (!functionName) return;
 
-    const files = await findSrcFiles(workspaceRoot);
+    const result = await isFunctionDeclared(functionName, workspaceRoot);
+    if (!result) return;
 
-    for (const filePath of files) {
-      const content = fs.readFileSync(filePath, 'utf8');
-      const fileLines = content.split(/\r?\n/);
-
-      // Dynamic regex using actual function name and full signature matching
-      const defRegex = new RegExp(`\\b(GLOBAL\\s+)?(DEF|DEFFCT)\\s+(\\w+\\s+)?${functionName}\\s*\\(([^)]*)\\)`, 'i');
-
-      for (let i = 0; i < fileLines.length; i++) {
-        const defLine = fileLines[i];
-        const match = defLine.match(defRegex);
-        if (match) {
-          const uri = URI.file(filePath).toString();
-          const startCol = defLine.indexOf(functionName);
-          return Location.create(uri, {
-            start: Position.create(i, startCol),
-            end: Position.create(i, startCol + functionName.length),
-          });
-        }
-      }
-    }
-
-    return undefined;
+    return Location.create(result.uri, {
+      start: Position.create(result.line, result.startChar),
+      end: Position.create(result.line, result.endChar)
+    });
   }
 );
+
 
 // Utility: Recursively find .src .dat files in workspace
 async function findSrcFiles(dir: string): Promise<string[]> {
@@ -203,61 +169,78 @@ async function findSrcFiles(dir: string): Promise<string[]> {
   }
   return results;
 }
-
 connection.onHover(async (params) => {
   const doc = documents.get(params.textDocument.uri);
-  if (!doc) return;
+  if (!doc || !workspaceRoot) return;
 
   const lines = doc.getText().split(/\r?\n/);
   const lineText = lines[params.position.line];
-  
-  //Do nothing if we already are on the Decl line
-  if (/^\s*(GLOBAL\s+)?(DEF|DEFFCT)\b/i.test(lineText)) return undefined;
-  if (/^\s*(DECL|SIGNAL|STRUC)\b/i.test(lineText)) return;
 
+  if (/^\s*(GLOBAL\s+)?(DEF|DEFFCT|DECL|SIGNAL|STRUC)\b/i.test(lineText)) return;
+
+  const functionName = getWordAtPosition(lineText, params.position.character);
+  if (!functionName) return;
+
+  const result = await isFunctionDeclared(functionName, workspaceRoot);
+  if (!result) return;
+
+  return {
+    contents: {
+      kind: 'markdown',
+      value: `**${functionName}**(${result.params})`
+    }
+  };
+});
+
+function getWordAtPosition(lineText: string, character: number): string | undefined {
   const wordMatch = lineText.match(/\b(\w+)\b/g);
   if (!wordMatch) return;
 
-  // Find the hovered word by checking which word contains the position.character
-  let hoveredWord: string | undefined;
   let charCount = 0;
   for (const w of wordMatch) {
     const start = lineText.indexOf(w, charCount);
     const end = start + w.length;
-    if (params.position.character >= start && params.position.character <= end) {
-      hoveredWord = w;
-      break;
+    if (character >= start && character <= end) {
+      return w;
     }
     charCount = end;
   }
-  if (!hoveredWord) return;
+  return;
+}
+interface FunctionDeclaration {
+  uri: string;
+  line: number;
+  startChar: number;
+  endChar: number;
+  params: string;
+}
 
-  if (!workspaceRoot) return;
-
-  const files = await findSrcFiles(workspaceRoot);
+async function isFunctionDeclared(name: string, root: string): Promise<FunctionDeclaration | undefined> {
+  const files = await findSrcFiles(root);
+  const defRegex = new RegExp(`\\b(GLOBAL\\s+)?(DEF|DEFFCT)\\s+(\\w+\\s+)?${name}\\s*\\(([^)]*)\\)`, 'i');
 
   for (const filePath of files) {
     const content = fs.readFileSync(filePath, 'utf8');
     const fileLines = content.split(/\r?\n/);
     for (let i = 0; i < fileLines.length; i++) {
       const defLine = fileLines[i];
-      // Regex to capture function definition with parameters, e.g.:
-      const defRegex = new RegExp(`\\b(GLOBAL\\s+)?(DEF|DEFFCT)\\s+(\\w+\\s+)?${hoveredWord}\\s*\\(([^)]*)\\)`, 'i');
-      const defMatch = defLine.match(defRegex);
-      if (defMatch) {
-        const paramsStr = defMatch[4].trim();
+      const match = defLine.match(defRegex);
+      if (match) {
+        const uri = URI.file(filePath).toString();
+        const startChar = defLine.indexOf(name);
         return {
-          contents: {
-            kind: 'markdown',
-            value: `**${hoveredWord}**(${paramsStr})`
-          }
+          uri,
+          line: i,
+          startChar,
+          endChar: startChar + name.length,
+          params: match[4].trim()
         };
       }
     }
   }
 
-  return null;
-});
+  return undefined;
+}
 
 
 // Call this once during initialization
@@ -469,7 +452,7 @@ function validateVariablesUsage(document: TextDocument, variableTypes: { [varNam
 
   const collector = new DeclaredVariableCollector();
   //logToFile(`Extracted variables : ${JSON.stringify(variableTypes, null, 2)}`);
-  
+
   const variableRegex = /\b([a-zA-Z_]\w*)\b/g;
 
   // Keywords and types to exclude from "used variables"
