@@ -133,7 +133,6 @@ function logToFile(message: string) {
 
 connection.onDefinition(
   async (params: DefinitionParams): Promise<Location | undefined> => {
-    console.log(`Definition requested for: ${params.textDocument.uri} at ${params.position.line}:${params.position.character}`);
     const doc = documents.get(params.textDocument.uri);
     if (!doc || !workspaceRoot) return;
 
@@ -380,15 +379,6 @@ function parseKrlFile(datContent: string): void {
 }
 
 
-
-connection.onNotification('custom/validateFile', (params: { uri: string, text: string }) => {
-    console.log(`Validating file: ${params.uri}`);
-  if (params.uri.match(/\.(dat|src|sub)$/i)) {
-    parseKrlFile(params.text); 
-  }
-});
-
-
 connection.onCompletion((params: TextDocumentPositionParams): CompletionItem[] => {
   const document = documents.get(params.textDocument.uri);
   if (!document) return [];
@@ -479,9 +469,7 @@ function validateVariablesUsage(document: TextDocument, variableTypes: { [varNam
 
   const collector = new DeclaredVariableCollector();
   //logToFile(`Extracted variables : ${JSON.stringify(variableTypes, null, 2)}`);
-
-  // Regex to match possible variable names: words (letters, digits, underscore)
-  // Adjust if your variable naming rules differ
+  
   const variableRegex = /\b([a-zA-Z_]\w*)\b/g;
 
   // Keywords and types to exclude from "used variables"
@@ -489,11 +477,12 @@ function validateVariablesUsage(document: TextDocument, variableTypes: { [varNam
     'GLOBAL', 'DEF', 'DEFFCT', 'END','ENDFCT', 'RETURN', 'TRIGGER', 
     'REAL', 'BOOL', 'DECL', 'IF', 'ELSE','ENDIF','CONTINUE', 'FOR', 'ENDFOR', 'WHILE', 
     'AND', 'OR', 'NOT', 'TRUE', 'FALSE', 'INT', 'STRING','PULSE','WAIT','SEC','NULLFRAME','THEN',
-    'CASE', 'DEFAULT', 'SWITCH', 'ENDSWITCH','BREAK','ABS', 'SIN', 'COS', 'TAN', 'ASIN', 'ACOS',
+    'CASE', 'DEFAULT', 'SWITCH', 'ENDSWITCH','BREAK','ABS', 'SIN', 'COS', 'TAN', 'ASIN', 'ACOS','ATAN2','MAX','MIN',
     'DEFDAT','ENDDAT','PUBLIC','STRUC','WHEN','DISTANCE','DO','DELAY', 'PRIO', 'LIN', 'PTP','DELAY',
     'C_PTP', 'C_LIN', 'C_VEL', 'C_DIS','BAS','LOAD', 'FRAME','IN','OUT',
     'X', 'Y', 'Z', 'A', 'B', 'C','S','T','A1','A2','A3','A4','A5','A6','E1','E2','E3','E4','E5','E6',
-    'SQRT','TO','Axis','E6AXIS','E6POS'
+    'SQRT','TO','Axis','E6AXIS','E6POS','LOAD_DATA','BASE','TOOL'
+    ,'INVERSE','FORWARD','B_AND','B_OR','B_NOT','B_XOR','B_NAND','B_NOR','B_XNOR',
   ]);
 
   for (let lineIndex = 0; lineIndex < lines.length; lineIndex++) {
@@ -520,8 +509,8 @@ function validateVariablesUsage(document: TextDocument, variableTypes: { [varNam
         if (match.index >= paramIndex) continue; 
       }
 
-      //Ignore variables system that start by $ sign
-      if (match.index !== undefined && match.index > 0 && line[match.index - 1] === '$') continue
+      //Ignore variables system that start by $ sign or #
+      if (match.index !== undefined && match.index > 0 && line[match.index - 1] === '$' && line[match.index - 1] === '#') continue
 
       // Ignore keywords and known types
       if (keywords.has(varName.toUpperCase())) continue;
