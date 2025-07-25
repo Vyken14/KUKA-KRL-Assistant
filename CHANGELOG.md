@@ -4,6 +4,15 @@ All notable changes to this project will be documented in this file.
 
 ---
 
+## [1.4.0] - 2025-07-25
+### Added
+- Autocompletion via Intellisense for functions with respectives params
+
+### Removed
+- Warning for GLOBAL ENUM that don't required DECL
+
+---
+
 ## [1.3.1] - 2025-07-25
 ### Other
 - Update ReadMe and Changelog

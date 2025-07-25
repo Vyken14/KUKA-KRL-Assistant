@@ -10,6 +10,7 @@ A Visual Studio Code extension to help write, understand, and maintain KUKA Robo
 - Warning when a GLOBAL variable is missing a DECL, SIGNAL or STRUC 
 - Error when a variable name exceeds KUKA's 24-character limit 
 - Autocompletion for variables after typing the variable name followed by '.'
+- IntelliSense Autocompletion for Functions and their own Parameters
 
 ## Installation
 
