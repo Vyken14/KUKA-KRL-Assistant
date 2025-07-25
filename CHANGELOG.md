@@ -4,6 +4,12 @@ All notable changes to this project will be documented in this file.
 
 ---
 
+## [1.3.1] - 2025-07-25
+### Other
+- Update ReadMe and Changelog
+
+---
+
 ## [1.3.0] - 2025-07-25
 ### Added
 - Extract variables from DECL, STRUC, and ENUM.
