@@ -30,21 +30,36 @@ const connection = createConnection(ProposedFeatures.all);
 const documents: TextDocuments<TextDocument> = new TextDocuments(TextDocument);
 
 let workspaceRoot: string | null = null;
+const fileVariablesMap: Map<string, VariableInfo[]> = new Map();
 
 connection.onInitialize((params: InitializeParams): InitializeResult => {
   workspaceRoot = params.rootUri ? URI.parse(params.rootUri).fsPath : null;
 
-  documents.listen(connection); 
-  connection.onInitialized(() => {
-    validateAllDatFiles(connection);
-  });
+  documents.listen(connection);
 
+  connection.onInitialized(() => {
+    if (workspaceRoot) {
+      const files = getAllDatFiles(workspaceRoot); // You must implement this (see below)
+      files.forEach(filePath => {
+        const content = fs.readFileSync(filePath, 'utf8');
+        const uri = URI.file(filePath).toString();
+
+        const collector = new DeclaredVariableCollector();
+        collector.extractFromText(content);
+        fileVariablesMap.set(uri, collector.getVariables());
+
+        const mergedVariables = mergeAllVariables(fileVariablesMap);
+        const diagnostics = validateVariablesUsage(TextDocument.create(uri, 'krl', 1, content), mergedVariables);
+        connection.sendDiagnostics({ uri, diagnostics });
+      });
+    }
+  });
 
   return {
     capabilities: {
       textDocumentSync: TextDocumentSyncKind.Incremental,
       definitionProvider: true,
-      hoverProvider: true ,
+      hoverProvider: true,
       completionProvider: {
         triggerCharacters: ['.']
       }
@@ -52,17 +67,53 @@ connection.onInitialize((params: InitializeParams): InitializeResult => {
   };
 });
 
+
 documents.onDidChangeContent(change => {
-  if (change.document.uri.endsWith('.dat')) {
-    validateDatFile(change.document, connection);
+  const { document } = change;
+
+  if (document.uri.endsWith('.dat')) {
+    validateDatFile(document, connection);
   }
-    parseKrlFile(change.document.getText()); 
+
+  parseKrlFile(document.getText());
+
   const collector = new DeclaredVariableCollector();
-  collector.extractFromText(change.document.getText());
-  logToFile(`Extracted variables from ${change.document.uri}: ${JSON.stringify(collector.getVariables(), null, 2)}`);
+  collector.extractFromText(document.getText());
+  fileVariablesMap.set(document.uri, collector.getVariables());
 
-
+  const mergedVariables = mergeAllVariables(fileVariablesMap);
+  const diagnostics = validateVariablesUsage(document, mergedVariables);
+  connection.sendDiagnostics({ uri: document.uri, diagnostics });
 });
+
+function mergeAllVariables(map: Map<string, VariableInfo[]>): { [varName: string]: string } {
+  const result: { [varName: string]: string } = {};
+  for (const vars of map.values()) {
+    for (const v of vars) {
+      result[v.name] = v.type || '';
+    }
+  }
+  return result;
+}
+
+function getAllDatFiles(dir: string): string[] {
+  const result: string[] = [];
+
+  function recurse(currentDir: string) {
+    const entries = fs.readdirSync(currentDir, { withFileTypes: true });
+    for (const entry of entries) {
+      const fullPath = path.join(currentDir, entry.name);
+      if (entry.isDirectory()) {
+        recurse(fullPath);
+      } else if (entry.isFile() && fullPath.endsWith('.dat')) {
+        result.push(fullPath);
+      }
+    }
+  }
+
+  recurse(dir);
+  return result;
+}
 
 
 
@@ -417,6 +468,58 @@ class DeclaredVariableCollector {
   clear(): void {
     this.variables.clear();
   }
+}
+
+function validateVariablesUsage(document: TextDocument, variableTypes: { [varName: string]: string }): Diagnostic[] {
+  const diagnostics: Diagnostic[] = [];
+  const text = document.getText();
+  const lines = text.split(/\r?\n/);
+
+  const collector = new DeclaredVariableCollector();
+  logToFile(`Extracted variables : ${JSON.stringify(variableTypes, null, 2)}`);
+
+  // Regex to match possible variable names: words (letters, digits, underscore)
+  // Adjust if your variable naming rules differ
+  const variableRegex = /\b([a-zA-Z_]\w*)\b/g;
+
+  // Keywords and types to exclude from "used variables"
+  const keywords = new Set([
+    'GLOBAL', 'DECL', 'STRUC', 'SIGNAL', 'INT', 'REAL', 'BOOL', 'CHAR', 'STRING', 'IF', 'ELSE', 'WHILE',
+    'FOR', 'RETURN', 'FUNCTION', 'DEF', 'DEFFCT', 'END', 'TRUE', 'FALSE', 'NULL',
+  ]);
+
+  for (let lineIndex = 0; lineIndex < lines.length; lineIndex++) {
+    const line = lines[lineIndex].trim();
+
+    // Skip lines that declare variables or structs or signals
+    if (/^\s*(GLOBAL\s+)?(DECL|STRUC|SIGNAL)\b/i.test(line)) {
+      continue;
+    }
+
+    let match;
+    while ((match = variableRegex.exec(line)) !== null) {
+      const varName = match[1];
+
+      // Ignore keywords and known types
+      if (keywords.has(varName.toUpperCase())) continue;
+
+      // Check if variable is declared
+      if (!(varName in variableTypes)) {
+        // Mark diagnostic
+        diagnostics.push({
+          severity: DiagnosticSeverity.Error,
+          message: `Variable "${varName}" not declared.`,
+          range: {
+            start: { line: lineIndex, character: match.index },
+            end: { line: lineIndex, character: match.index + varName.length }
+          },
+          source: 'krl-linter'
+        });
+      }
+    }
+  }
+
+  return diagnostics;
 }
 
 

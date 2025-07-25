@@ -18,11 +18,24 @@ const vscode_uri_1 = require("vscode-uri");
 const connection = (0, node_1.createConnection)(node_1.ProposedFeatures.all);
 const documents = new node_1.TextDocuments(vscode_languageserver_textdocument_1.TextDocument);
 let workspaceRoot = null;
+const fileVariablesMap = new Map();
 connection.onInitialize((params) => {
     workspaceRoot = params.rootUri ? vscode_uri_1.URI.parse(params.rootUri).fsPath : null;
     documents.listen(connection);
     connection.onInitialized(() => {
-        validateAllDatFiles(connection);
+        if (workspaceRoot) {
+            const files = getAllDatFiles(workspaceRoot); // You must implement this (see below)
+            files.forEach(filePath => {
+                const content = fs.readFileSync(filePath, 'utf8');
+                const uri = vscode_uri_1.URI.file(filePath).toString();
+                const collector = new DeclaredVariableCollector();
+                collector.extractFromText(content);
+                fileVariablesMap.set(uri, collector.getVariables());
+                const mergedVariables = mergeAllVariables(fileVariablesMap);
+                const diagnostics = validateVariablesUsage(vscode_languageserver_textdocument_1.TextDocument.create(uri, 'krl', 1, content), mergedVariables);
+                connection.sendDiagnostics({ uri, diagnostics });
+            });
+        }
     });
     return {
         capabilities: {
@@ -36,14 +49,44 @@ connection.onInitialize((params) => {
     };
 });
 documents.onDidChangeContent(change => {
-    if (change.document.uri.endsWith('.dat')) {
-        validateDatFile(change.document, connection);
+    const { document } = change;
+    if (document.uri.endsWith('.dat')) {
+        validateDatFile(document, connection);
     }
-    parseKrlFile(change.document.getText());
+    parseKrlFile(document.getText());
     const collector = new DeclaredVariableCollector();
-    collector.extractFromText(change.document.getText());
-    logToFile(`Extracted variables from ${change.document.uri}: ${JSON.stringify(collector.getVariables(), null, 2)}`);
+    collector.extractFromText(document.getText());
+    fileVariablesMap.set(document.uri, collector.getVariables());
+    const mergedVariables = mergeAllVariables(fileVariablesMap);
+    const diagnostics = validateVariablesUsage(document, mergedVariables);
+    connection.sendDiagnostics({ uri: document.uri, diagnostics });
 });
+function mergeAllVariables(map) {
+    const result = {};
+    for (const vars of map.values()) {
+        for (const v of vars) {
+            result[v.name] = v.type || '';
+        }
+    }
+    return result;
+}
+function getAllDatFiles(dir) {
+    const result = [];
+    function recurse(currentDir) {
+        const entries = fs.readdirSync(currentDir, { withFileTypes: true });
+        for (const entry of entries) {
+            const fullPath = path.join(currentDir, entry.name);
+            if (entry.isDirectory()) {
+                recurse(fullPath);
+            }
+            else if (entry.isFile() && fullPath.endsWith('.dat')) {
+                result.push(fullPath);
+            }
+        }
+    }
+    recurse(dir);
+    return result;
+}
 documents.onDidOpen(e => {
     console.log(`Opened: ${e.document.uri}`);
 });
@@ -329,6 +372,49 @@ class DeclaredVariableCollector {
     clear() {
         this.variables.clear();
     }
+}
+function validateVariablesUsage(document, variableTypes) {
+    const diagnostics = [];
+    const text = document.getText();
+    const lines = text.split(/\r?\n/);
+    const collector = new DeclaredVariableCollector();
+    logToFile(`Extracted variables : ${JSON.stringify(variableTypes, null, 2)}`);
+    // Regex to match possible variable names: words (letters, digits, underscore)
+    // Adjust if your variable naming rules differ
+    const variableRegex = /\b([a-zA-Z_]\w*)\b/g;
+    // Keywords and types to exclude from "used variables"
+    const keywords = new Set([
+        'GLOBAL', 'DECL', 'STRUC', 'SIGNAL', 'INT', 'REAL', 'BOOL', 'CHAR', 'STRING', 'IF', 'ELSE', 'WHILE',
+        'FOR', 'RETURN', 'FUNCTION', 'DEF', 'DEFFCT', 'END', 'TRUE', 'FALSE', 'NULL',
+    ]);
+    for (let lineIndex = 0; lineIndex < lines.length; lineIndex++) {
+        const line = lines[lineIndex].trim();
+        // Skip lines that declare variables or structs or signals
+        if (/^\s*(GLOBAL\s+)?(DECL|STRUC|SIGNAL)\b/i.test(line)) {
+            continue;
+        }
+        let match;
+        while ((match = variableRegex.exec(line)) !== null) {
+            const varName = match[1];
+            // Ignore keywords and known types
+            if (keywords.has(varName.toUpperCase()))
+                continue;
+            // Check if variable is declared
+            if (!(varName in variableTypes)) {
+                // Mark diagnostic
+                diagnostics.push({
+                    severity: node_1.DiagnosticSeverity.Error,
+                    message: `Variable "${varName}" not declared.`,
+                    range: {
+                        start: { line: lineIndex, character: match.index },
+                        end: { line: lineIndex, character: match.index + varName.length }
+                    },
+                    source: 'krl-linter'
+                });
+            }
+        }
+    }
+    return diagnostics;
 }
 connection.listen();
 documents.listen(connection);
