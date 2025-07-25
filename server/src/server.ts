@@ -57,8 +57,14 @@ documents.onDidChangeContent(change => {
     validateDatFile(change.document, connection);
   }
     parseKrlFile(change.document.getText()); 
-  
+  const collector = new DeclaredVariableCollector();
+  collector.extractFromText(change.document.getText());
+  logToFile(`Extracted variables from ${change.document.uri}: ${JSON.stringify(collector.getVariables(), null, 2)}`);
+
+
 });
+
+
 
 documents.onDidOpen(e => {
   console.log(`Opened: ${e.document.uri}`);
@@ -367,6 +373,51 @@ connection.onCompletion((params: TextDocumentPositionParams): CompletionItem[] =
     kind: CompletionItemKind.Field
   }));
 });
+
+interface VariableInfo {
+  name: string;
+  type: string;
+}
+
+class DeclaredVariableCollector {
+  private variables: Map<string, string> = new Map(); // name -> type
+
+  extractFromText(documentText: string): void {
+    // Remove STRUC blocks (non-greedy match)
+    const textWithoutStrucs = documentText.replace(/STRUC\s+\w+[^]*?ENDSTRUC/gi, '');
+
+    // Match DECL statements with optional GLOBAL before or after
+    const declRegex = /^\s*(GLOBAL\s+)?DECL\s+(GLOBAL\s+)?(\w+)\s+([^\r\n;]+)/gim;
+
+    let match: RegExpExecArray | null;
+    while ((match = declRegex.exec(textWithoutStrucs)) !== null) {
+      const type = match[3];
+      const varList = match[4];
+
+      const varNames = varList
+        .split(',')
+        .map(name => name.trim())
+        .map(name => name.replace(/\[.*?\]/, ''))         
+        .map(name => name.replace(/\s*=\s*.+$/, ''))      
+        .filter(name => /^[a-zA-Z_]\w*$/.test(name)); 
+
+
+      for (const name of varNames) {
+        if (!this.variables.has(name)) {
+          this.variables.set(name, type);
+        }
+      }
+    }
+  }
+
+  getVariables(): VariableInfo[] {
+    return Array.from(this.variables.entries()).map(([name, type]) => ({ name, type }));
+  }
+
+  clear(): void {
+    this.variables.clear();
+  }
+}
 
 
 
