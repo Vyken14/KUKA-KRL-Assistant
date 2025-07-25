@@ -1,6 +1,11 @@
 # Changelog
 
 All notable changes to this project will be documented in this file.
+---
+
+## [1.4.1] - 2025-07-25
+### Fixed
+- Autocompletion with variables only shows now subvariables with '.', not declared functions
 
 ---
 
