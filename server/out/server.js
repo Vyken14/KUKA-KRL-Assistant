@@ -21,7 +21,6 @@ let workspaceRoot = null;
 const fileVariablesMap = new Map();
 connection.onInitialize((params) => {
     workspaceRoot = params.rootUri ? vscode_uri_1.URI.parse(params.rootUri).fsPath : null;
-    documents.listen(connection);
     //delete log file if it exists -- DEBUG ONLY
     if (fs.existsSync(logFile)) {
         fs.unlinkSync(logFile);
@@ -39,11 +38,15 @@ connection.onInitialize((params) => {
             }
             // Step 2: Once all variables are collected, run validation per file
             const mergedVariables = mergeAllVariables(fileVariablesMap);
+            logToFile(`Merged variables: ${JSON.stringify(mergedVariables, null, 2)}`);
             for (const filePath of files) {
                 const content = fs.readFileSync(filePath, 'utf8');
                 const uri = vscode_uri_1.URI.file(filePath).toString();
-                const diagnostics = yield validateVariablesUsage(vscode_languageserver_textdocument_1.TextDocument.create(uri, 'krl', 1, content), mergedVariables);
-                connection.sendDiagnostics({ uri, diagnostics });
+                // const diagnostics = await validateVariablesUsage(
+                //   TextDocument.create(uri, 'krl', 1, content),
+                //   mergedVariables
+                // );
+                // connection.sendDiagnostics({ uri, diagnostics });
             }
         }
     }));
@@ -63,14 +66,13 @@ documents.onDidChangeContent((change) => __awaiter(void 0, void 0, void 0, funct
     if (document.uri.endsWith('.dat')) {
         validateDatFile(document, connection);
     }
-    parseKrlFile(document.getText());
+    extractStrucVariables(document.getText());
     const collector = new DeclaredVariableCollector();
     collector.extractFromText(document.getText());
     fileVariablesMap.set(document.uri, collector.getVariables());
-    logToFile(`New anlaysis for file: ${document.uri}`);
     const mergedVariables = mergeAllVariables(fileVariablesMap);
-    const diagnostics = yield validateVariablesUsage(document, mergedVariables);
-    connection.sendDiagnostics({ uri: document.uri, diagnostics });
+    // const diagnostics = await validateVariablesUsage(document, mergedVariables);
+    // connection.sendDiagnostics({ uri: document.uri, diagnostics });
 }));
 function mergeAllVariables(map) {
     const result = {};
@@ -232,7 +234,7 @@ function validateDatFile(document, connection) {
         }
         // Look for global declarations
         if (/^(DECL|SIGNAL|STRUC)/i.test(line) && !insidePublicDefdat) {
-            diagnostics.push({
+            const newDiagnostic = {
                 severity: node_1.DiagnosticSeverity.Error,
                 range: {
                     start: { line: i, character: 0 },
@@ -240,56 +242,39 @@ function validateDatFile(document, connection) {
                 },
                 message: `Global declaration "${line.split(/\s+/)[0]}" is not inside a PUBLIC DEFDAT.`,
                 source: 'krl-linter'
-            });
+            };
+            if (!isDuplicateDiagnostic(newDiagnostic, diagnostics)) {
+                diagnostics.push(newDiagnostic);
+            }
         }
     }
     connection.sendDiagnostics({ uri: document.uri, diagnostics });
 }
 let variableStructTypes = {};
 let structDefinitions = {};
-function parseKrlFile(datContent) {
-    const structRegex = /^GLOBAL\s+STRUC\s+(\w+)\s+(.+)$/gm;
-    const knownTypes = ['INT', 'REAL', 'BOOL', 'CHAR', 'STRING'];
-    let match;
+function extractStrucVariables(datContent) {
+    const structRegex = /^[ \t]*(?:GLOBAL\s+)?(?:DECL\s+)?(?:GLOBAL\s+)?(STRUC|ENUM)\s+(\w+)\s+(.+)$/gm;
+    const knownTypes = ['INT', 'REAL', 'BOOL', 'CHAR', 'STRING', 'FRAME', 'ENUM'];
     const tempStructDefinitions = {};
-    // Step 1: Parse all GLOBAL STRUC blocks
+    let match;
     while ((match = structRegex.exec(datContent)) !== null) {
-        const structName = match[1];
-        const membersRaw = match[2];
-        const members = [];
-        // Match known types and their variable lists
-        const typeRegex = /\b(?:INT|REAL|BOOL|CHAR|STRING)\s+([\w,\s]+)/g;
-        let typeMatch;
-        while ((typeMatch = typeRegex.exec(membersRaw)) !== null) {
-            const vars = typeMatch[1]
-                .replace("INT", '')
-                .replace("REAL", '')
-                .replace("BOOL", '')
-                .replace("CHAR", '')
-                .replace("STRING", '')
-                .split(',')
-                .map(v => v.trim())
-                .filter(v => v.length > 0);
-            members.push(...vars);
-        }
-        // Match any remaining tokens not part of known types
-        const allVarsRaw = membersRaw.split(/[, ]+/).filter(Boolean);
-        const extraMembers = allVarsRaw.filter(token => !members.includes(token) &&
-            !knownTypes.includes(token));
-        members.push(...extraMembers);
+        const structName = match[2];
+        let membersRaw = match[3];
+        // Remove inline comments (anything after a ;)
+        membersRaw = membersRaw.split(';')[0].trim();
+        const tokens = membersRaw.split(/[,\s]+/).map(v => v.trim()).filter(Boolean);
+        const members = tokens.filter(token => !knownTypes.includes(token.toUpperCase()) &&
+            !['ENUM', 'STRUC'].includes(token.toUpperCase()));
         tempStructDefinitions[structName] = members;
-        // logToFile(`Parsed struct "${structName}" with raw members: ${members.join(', ')}`);
     }
-    // Step 2: Remove custom types used as variable names
+    // Clean members to avoid other struct names
     for (const [structName, members] of Object.entries(tempStructDefinitions)) {
-        const filtered = members.filter(member => !knownTypes.includes(member) && // Not a known type
-            !Object.keys(tempStructDefinitions).includes(member) // Not a custom struct
-        );
+        const filtered = members.filter(member => !knownTypes.includes(member.toUpperCase()) &&
+            !Object.keys(tempStructDefinitions).includes(member));
         structDefinitions[structName] = filtered;
-        //logToFile(`Cleaned struct "${structName}" with valid variables: ${filtered.join(', ')}`);
     }
 }
-connection.onCompletion((params) => {
+connection.onCompletion((params) => __awaiter(void 0, void 0, void 0, function* () {
     const document = documents.get(params.textDocument.uri);
     if (!document)
         return [];
@@ -297,10 +282,11 @@ connection.onCompletion((params) => {
     // Step 1: Scan document and build variableStructTypes
     variableStructTypes = {}; // reset
     for (const line of lines) {
-        const cleanedLine = line.trim().replace(/^GLOBAL\s+DECL\s+/i, '');
-        const parts = cleanedLine.split(/\s+/);
-        if (parts.length >= 2) {
-            const [type, varName] = parts;
+        const declRegex = /^(?:GLOBAL\s+)?(?:DECL\s+)?(?:GLOBAL\s+)?(\w+)\s+(\w+)/i;
+        const match = declRegex.exec(line.trim());
+        if (match) {
+            const type = match[1];
+            const varName = match[2];
             variableStructTypes[varName] = type;
         }
     }
@@ -322,7 +308,7 @@ connection.onCompletion((params) => {
         label: member,
         kind: node_1.CompletionItemKind.Field
     }));
-});
+}));
 class DeclaredVariableCollector {
     constructor() {
         this.variables = new Map(); // name -> type
@@ -430,16 +416,6 @@ function validateVariablesUsage(document, variableTypes) {
                     continue;
                 // Check if variable is declared
                 if (!(varName in variableTypes)) {
-                    // Mark diagnostic
-                    // diagnostics.push({
-                    //   severity: DiagnosticSeverity.Error,
-                    //   message: `Variable "${varName}" not declared.`,
-                    //   range: {
-                    //     start: { line: lineIndex, character: match.index },
-                    //     end: { line: lineIndex, character: match.index + varName.length }
-                    //   },
-                    //   source: 'krl-linter'
-                    // });
                     const newDiagnostic = {
                         severity: node_1.DiagnosticSeverity.Error,
                         message: `Variable "${varName}" not declared.`,

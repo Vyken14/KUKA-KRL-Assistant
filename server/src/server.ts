@@ -24,7 +24,6 @@ import {
 import * as fs from 'fs';
 import * as path from 'path';
 import { URI } from 'vscode-uri';
-import { log } from 'console';
 
 const connection = createConnection(ProposedFeatures.all);
 const documents: TextDocuments<TextDocument> = new TextDocuments(TextDocument);
@@ -34,8 +33,6 @@ const fileVariablesMap: Map<string, VariableInfo[]> = new Map();
 
 connection.onInitialize((params: InitializeParams): InitializeResult => {
   workspaceRoot = params.rootUri ? URI.parse(params.rootUri).fsPath : null;
-
-  documents.listen(connection);
 
   //delete log file if it exists -- DEBUG ONLY
   if (fs.existsSync(logFile)) {
@@ -58,17 +55,17 @@ connection.onInitialized(async () => {
 
     // Step 2: Once all variables are collected, run validation per file
     const mergedVariables = mergeAllVariables(fileVariablesMap);
-
+    logToFile(`Merged variables: ${JSON.stringify(mergedVariables, null, 2)}`);
     for (const filePath of files) {
       const content = fs.readFileSync(filePath, 'utf8');
       const uri = URI.file(filePath).toString();
 
-      const diagnostics = await validateVariablesUsage(
-        TextDocument.create(uri, 'krl', 1, content),
-        mergedVariables
-      );
+      // const diagnostics = await validateVariablesUsage(
+      //   TextDocument.create(uri, 'krl', 1, content),
+      //   mergedVariables
+      // );
 
-      connection.sendDiagnostics({ uri, diagnostics });
+      // connection.sendDiagnostics({ uri, diagnostics });
     }
   }
 });
@@ -94,16 +91,15 @@ documents.onDidChangeContent(async change => {
     validateDatFile(document, connection);
   }
 
-  parseKrlFile(document.getText());
+  extractStrucVariables(document.getText());
 
   const collector = new DeclaredVariableCollector();
   collector.extractFromText(document.getText());
   fileVariablesMap.set(document.uri, collector.getVariables());
 
-  logToFile(`New anlaysis for file: ${document.uri}`);
   const mergedVariables = mergeAllVariables(fileVariablesMap);
-  const diagnostics = await validateVariablesUsage(document, mergedVariables);
-  connection.sendDiagnostics({ uri: document.uri, diagnostics });
+  // const diagnostics = await validateVariablesUsage(document, mergedVariables);
+  // connection.sendDiagnostics({ uri: document.uri, diagnostics });
 });
 
 function mergeAllVariables(map: Map<string, VariableInfo[]>): { [varName: string]: string } {
@@ -318,68 +314,47 @@ interface VariableToStructMap {
   [varName: string]: string; // VarTest → Template
 }
 let variableStructTypes: VariableToStructMap = {};
-
 let structDefinitions: StructMap = {};
+function extractStrucVariables(datContent: string): void {
+  const structRegex = /^[ \t]*(?:GLOBAL\s+)?(?:DECL\s+)?(?:GLOBAL\s+)?(STRUC|ENUM)\s+(\w+)\s+(.+)$/gm;
 
-function parseKrlFile(datContent: string): void {
-  const structRegex = /^GLOBAL\s+STRUC\s+(\w+)\s+(.+)$/gm;
-  const knownTypes = ['INT', 'REAL', 'BOOL', 'CHAR', 'STRING'];
-  let match;
-
+  const knownTypes = ['INT', 'REAL', 'BOOL', 'CHAR', 'STRING', 'FRAME', 'ENUM'];
   const tempStructDefinitions: Record<string, string[]> = {};
 
-  // Step 1: Parse all GLOBAL STRUC blocks
+  let match;
   while ((match = structRegex.exec(datContent)) !== null) {
-    const structName = match[1];
-    const membersRaw = match[2];
+    const structName = match[2];
+    let membersRaw = match[3];
 
-    const members: string[] = [];
+    // Remove inline comments (anything after a ;)
+    membersRaw = membersRaw.split(';')[0].trim();
 
-    // Match known types and their variable lists
-    const typeRegex = /\b(?:INT|REAL|BOOL|CHAR|STRING)\s+([\w,\s]+)/g;
-    let typeMatch;
-
-    while ((typeMatch = typeRegex.exec(membersRaw)) !== null) {
-      const vars = typeMatch[1]
-        .replace("INT", '') 
-        .replace("REAL", '') 
-        .replace("BOOL", '') 
-        .replace("CHAR", '') 
-        .replace("STRING", '') 
-        .split(',')
-        .map(v => v.trim())
-        .filter(v => v.length > 0);
-      members.push(...vars);
-    }
-
-    // Match any remaining tokens not part of known types
-    const allVarsRaw = membersRaw.split(/[, ]+/).filter(Boolean);
-    const extraMembers = allVarsRaw.filter(token =>
-      !members.includes(token) &&
-      !knownTypes.includes(token)
+    const tokens = membersRaw.split(/[,\s]+/).map(v => v.trim()).filter(Boolean);
+    const members = tokens.filter(token =>
+      !knownTypes.includes(token.toUpperCase()) &&
+      !['ENUM', 'STRUC'].includes(token.toUpperCase())
     );
 
-    members.push(...extraMembers);
-
     tempStructDefinitions[structName] = members;
-   // logToFile(`Parsed struct "${structName}" with raw members: ${members.join(', ')}`);
   }
 
-  // Step 2: Remove custom types used as variable names
+  // Clean members to avoid other struct names
   for (const [structName, members] of Object.entries(tempStructDefinitions)) {
     const filtered = members.filter(
       member =>
-        !knownTypes.includes(member) && // Not a known type
-        !Object.keys(tempStructDefinitions).includes(member) // Not a custom struct
+        !knownTypes.includes(member.toUpperCase()) &&
+        !Object.keys(tempStructDefinitions).includes(member)
     );
-
     structDefinitions[structName] = filtered;
-    //logToFile(`Cleaned struct "${structName}" with valid variables: ${filtered.join(', ')}`);
   }
 }
 
 
-connection.onCompletion((params: TextDocumentPositionParams): CompletionItem[] => {
+
+
+
+connection.onCompletion(async (params: CompletionParams): Promise<CompletionItem[]> => {
+
   const document = documents.get(params.textDocument.uri);
   if (!document) return [];
 
@@ -388,12 +363,14 @@ connection.onCompletion((params: TextDocumentPositionParams): CompletionItem[] =
   // Step 1: Scan document and build variableStructTypes
   variableStructTypes = {}; // reset
   for (const line of lines) {
-    const cleanedLine = line.trim().replace(/^GLOBAL\s+DECL\s+/i, '');
-    const parts = cleanedLine.split(/\s+/);
-    if (parts.length >= 2) {
-      const [type, varName] = parts;
+    const declRegex = /^(?:GLOBAL\s+)?(?:DECL\s+)?(?:GLOBAL\s+)?(\w+)\s+(\w+)/i;
+    const match = declRegex.exec(line.trim());
+    if (match) {
+      const type = match[1];
+      const varName = match[2];
       variableStructTypes[varName] = type;
     }
+
   }
 
   // Step 2: Get text before cursor
