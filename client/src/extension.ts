@@ -201,7 +201,7 @@ function validateTextDocument(document: vscode.TextDocument): void {
       }
 
       // Check for standalone GLOBAL usage without DECL, DEF, DEFFCT, STRUC, SIGNAL
-      if (/\bGLOBAL\b/i.test(lineText) && !/\b(DECL|DEF|DEFFCT|STRUC|SIGNAL)\b/i.test(lineText)) {
+      if (/\bGLOBAL\b/i.test(lineText) && !/\b(DECL|DEF|DEFFCT|STRUC|SIGNAL|ENUM)\b/i.test(lineText)) {
         const globalIndex = fullText.indexOf('GLOBAL');
         const range = new vscode.Range(i, globalIndex, i, globalIndex + 'GLOBAL'.length);
         diagnostics.push(new vscode.Diagnostic(
