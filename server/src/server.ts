@@ -256,7 +256,7 @@ connection.onCompletion(async (params: CompletionParams): Promise<CompletionItem
 
   const lines = document.getText().split(/\r?\n/);
 
-  // === 1. Struct field completions (unchanged) ===
+  // === 1. Struct field completions ===
   const variableStructTypes: Record<string, string> = {};
   for (const line of lines) {
     const declRegex = /^(?:GLOBAL\s+)?(?:DECL\s+)?(?:GLOBAL\s+)?(\w+)\s+(\w+)/i;
@@ -285,10 +285,12 @@ connection.onCompletion(async (params: CompletionParams): Promise<CompletionItem
         }))
       );
     }
+
+    // ✅ Only return struct completions after dot
+    return structItems;
   }
 
   // === 2. Function completions ===
-logToFile(`Extracted functions: ${JSON.stringify(functionsDeclared, null, 2)}`);
   const functionItems: CompletionItem[] = functionsDeclared.map(fn => {
     const paramList = fn.params.split(',').map(p => p.trim()).filter(Boolean);
     const snippetParams = paramList.map((p, i) => `\${${i + 1}:${p}}`).join(', ');
@@ -299,12 +301,13 @@ logToFile(`Extracted functions: ${JSON.stringify(functionsDeclared, null, 2)}`);
       detail: `${fn.name}(${fn.params})`,
       insertText: `${fn.name}(${snippetParams})`,
       insertTextFormat: InsertTextFormat.Snippet,
-      documentation: `User-defined function: ${fn.name}`
+      documentation: `User-defined function: ${fn.name}`,
+      commitCharacters: ['('], // optional: autocomplete on open-paren
     };
   });
 
-  // === 3. Return all completions combined ===
-  return [...structItems, ...functionItems];
+  // === 3. Return all completions (if not after a dot) ===
+  return [...functionItems, ...structItems];
 });
 
 
