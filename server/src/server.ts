@@ -418,25 +418,26 @@ class DeclaredVariableCollector {
 
     let match: RegExpExecArray | null;
     while ((match = declRegex.exec(textWithoutStrucs)) !== null) {
+      const fullLine = match[0];
       const type = match[3];
       const varList = match[4];
 
-      const varNames = varList
-        .split(',')
-        .map(name => name.trim())
-        .map(name => name.replace(/\[.*?\]/, ''))         
-        .map(name => name.replace(/\s*=\s*.+$/, ''))      
-        .filter(name => /^[a-zA-Z_]\w*$/.test(name)); 
-
+      const varNames = splitVarsRespectingBrackets(varList)
+      .map(name => name.trim())
+      .map(name => name.replace(/\[.*?\]/g, '').trim())
+      .map(name => name.replace(/\s*=\s*.+$/, ''))
+      .filter(name => /^[a-zA-Z_]\w*$/.test(name));
 
       for (const name of varNames) {
         if (!this.variables.has(name)) {
-          this.variables.set(name, type);
+          this.variables.set(name, type);        
+          
         }
       }
     }
   }
 
+  
   getVariables(): VariableInfo[] {
     return Array.from(this.variables.entries()).map(([name, type]) => ({ name, type }));
   }
@@ -446,13 +447,34 @@ class DeclaredVariableCollector {
   }
 }
 
+//Handle variables that contains brackets with commas
+const splitVarsRespectingBrackets = (input: string): string[] => {
+  const result: string[] = [];
+  let current = '';
+  let bracketDepth = 0;
+
+  for (let i = 0; i < input.length; i++) {
+    const char = input[i];
+    if (char === '[') bracketDepth++;
+    if (char === ']') bracketDepth--;
+    if (char === ',' && bracketDepth === 0) {
+      result.push(current.trim());
+      current = '';
+    } else {
+      current += char;
+    }
+  }
+  if (current) result.push(current.trim());
+  return result;
+};
+
+
 async function validateVariablesUsage(document: TextDocument, variableTypes: { [varName: string]: string }): Promise<Diagnostic[]> {
   const diagnostics: Diagnostic[] = [];
   const text = document.getText();
   const lines = text.split(/\r?\n/);
 
-  const collector = new DeclaredVariableCollector();
-  //logToFile(`Extracted variables : ${JSON.stringify(variableTypes, null, 2)}`);
+  logToFile(`Extracted variables : ${JSON.stringify(variableTypes, null, 2)}`);
 
   const variableRegex = /\b([a-zA-Z_]\w*)\b/g;
 

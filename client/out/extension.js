@@ -104,7 +104,7 @@ function activate(context) {
         });
         setTimeout(() => {
             validateAllKrlFiles();
-        }, 2000);
+        }, 1000);
     });
 }
 exports.activate = activate;

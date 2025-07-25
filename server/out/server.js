@@ -328,14 +328,20 @@ class DeclaredVariableCollector {
         const declRegex = /^\s*(GLOBAL\s+)?DECL\s+(GLOBAL\s+)?(\w+)\s+([^\r\n;]+)/gim;
         let match;
         while ((match = declRegex.exec(textWithoutStrucs)) !== null) {
+            const fullLine = match[0];
             const type = match[3];
             const varList = match[4];
-            const varNames = varList
-                .split(',')
+            const varNames = splitVarsRespectingBrackets(varList)
                 .map(name => name.trim())
-                .map(name => name.replace(/\[.*?\]/, ''))
+                .map(name => name.replace(/\[.*?\]/g, '').trim())
                 .map(name => name.replace(/\s*=\s*.+$/, ''))
                 .filter(name => /^[a-zA-Z_]\w*$/.test(name));
+            if (fullLine.trim() === "DECL GLOBAL INT RoutingEquipPLC[3,4],RoutingEquipPL2C[5,6]") {
+                logToFile(`🎯 Checking line: ${fullLine}`);
+                logToFile(`Type: ${type}`);
+                logToFile(`Raw varList: ${varList}`);
+                logToFile(`Extracted varNames: ${varNames.join(', ')}`);
+            }
             for (const name of varNames) {
                 if (!this.variables.has(name)) {
                     this.variables.set(name, type);
@@ -350,13 +356,35 @@ class DeclaredVariableCollector {
         this.variables.clear();
     }
 }
+//Handle variables that contains brackets with commas
+const splitVarsRespectingBrackets = (input) => {
+    const result = [];
+    let current = '';
+    let bracketDepth = 0;
+    for (let i = 0; i < input.length; i++) {
+        const char = input[i];
+        if (char === '[')
+            bracketDepth++;
+        if (char === ']')
+            bracketDepth--;
+        if (char === ',' && bracketDepth === 0) {
+            result.push(current.trim());
+            current = '';
+        }
+        else {
+            current += char;
+        }
+    }
+    if (current)
+        result.push(current.trim());
+    return result;
+};
 function validateVariablesUsage(document, variableTypes) {
     return __awaiter(this, void 0, void 0, function* () {
         const diagnostics = [];
         const text = document.getText();
         const lines = text.split(/\r?\n/);
-        const collector = new DeclaredVariableCollector();
-        //logToFile(`Extracted variables : ${JSON.stringify(variableTypes, null, 2)}`);
+        logToFile(`Extracted variables : ${JSON.stringify(variableTypes, null, 2)}`);
         const variableRegex = /\b([a-zA-Z_]\w*)\b/g;
         // Keywords and types to exclude from "used variables"
         const keywords = new Set([

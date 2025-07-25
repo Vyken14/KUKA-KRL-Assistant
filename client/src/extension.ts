@@ -116,7 +116,7 @@ export function activate(context: vscode.ExtensionContext) {
     });
     setTimeout(() => {
   validateAllKrlFiles();
-}, 2000); 
+}, 1000); 
 
 
   });
