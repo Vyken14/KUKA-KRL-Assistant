@@ -384,11 +384,18 @@ function validateVariablesUsage(document, variableTypes) {
     const variableRegex = /\b([a-zA-Z_]\w*)\b/g;
     // Keywords and types to exclude from "used variables"
     const keywords = new Set([
-        'GLOBAL', 'DECL', 'STRUC', 'SIGNAL', 'INT', 'REAL', 'BOOL', 'CHAR', 'STRING', 'IF', 'ELSE', 'WHILE',
-        'FOR', 'RETURN', 'FUNCTION', 'DEF', 'DEFFCT', 'END', 'TRUE', 'FALSE', 'NULL',
+        'GLOBAL', 'DEF', 'DEFFCT', 'END', 'ENDFCT', 'RETURN', 'TRIGGER',
+        'REAL', 'BOOL', 'DECL', 'IF', 'ELSE', 'ENDIF', 'CONTINUE', 'FOR', 'ENDFOR', 'WHILE',
+        'AND', 'OR', 'NOT', 'TRUE', 'FALSE', 'INT', 'STRING', 'PULSE', 'WAIT', 'SEC', 'NULLFRAME', 'THEN',
+        'CASE', 'DEFAULT', 'SWITCH', 'ENDSWITCH', 'BREAK', 'ABS', 'SIN', 'COS', 'TAN', 'ASIN', 'ACOS',
+        'DEFDAT', 'ENDDAT', 'PUBLIC', 'STRUC', 'WHEN', 'DISTANCE', 'DO', 'DELAY', 'PRIO', 'LIN', 'PTP', 'DELAY',
+        'C_PTP', 'C_LIN', 'C_VEL', 'C_DIS', 'BAS', 'LOAD', 'FRAME', 'IN', 'OUT',
+        'X', 'Y', 'Z', 'A', 'B', 'C', 'S', 'T', 'E1', 'E2', 'E3', 'E4', 'E5', 'E6',
+        'SQRT', 'TO',
+        'Axis', 'E6AXIS', 'E6POS'
     ]);
     for (let lineIndex = 0; lineIndex < lines.length; lineIndex++) {
-        const line = lines[lineIndex].trim();
+        const line = lines[lineIndex];
         // Skip lines that declare variables or structs or signals
         if (/^\s*(GLOBAL\s+)?(DECL|STRUC|SIGNAL)\b/i.test(line)) {
             continue;
@@ -396,6 +403,18 @@ function validateVariablesUsage(document, variableTypes) {
         let match;
         while ((match = variableRegex.exec(line)) !== null) {
             const varName = match[1];
+            //if a line as comment ; then skip everything after the ;
+            const commentIndex = line.indexOf(';');
+            if (commentIndex !== -1) {
+                if (match.index >= commentIndex)
+                    continue;
+            }
+            //if a line as param & then skip everything after the &
+            const paramIndex = line.indexOf('&');
+            if (paramIndex !== -1) {
+                if (match.index >= paramIndex)
+                    continue;
+            }
             // Ignore keywords and known types
             if (keywords.has(varName.toUpperCase()))
                 continue;
