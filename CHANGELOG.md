@@ -3,6 +3,13 @@
 All notable changes to this project will be documented in this file.
 ---
 
+## [1.4.2] - 2025-07-28
+### Fixed
+- `Go to Definition` didn't work properly for variable or custom variable type
+- `Go to Definition` will first check inside the same DEF, DEFCT if the variable is declare, then will check globally
+
+---
+
 ## [1.4.1] - 2025-07-25
 ### Fixed
 - Autocompletion with variables only shows now subvariables with '.', not declared functions
