@@ -75,6 +75,20 @@ let variableStructTypes: VariableToStructMap = {};
 let structDefinitions: StructMap = {};  
 let functionsDeclared: FunctionDeclaration[] = [];
 let mergedVariables :VariableInfo[] = [];
+
+const CODE_KEYWORDS = [
+  'GLOBAL', 'DEF', 'DEFFCT', 'END', 'ENDFCT', 'RETURN', 'TRIGGER', 
+    'REAL', 'BOOL', 'DECL', 'IF', 'ELSE', 'ENDIF', 'CONTINUE', 'FOR', 'ENDFOR', 'WHILE', 
+    'AND', 'OR', 'NOT', 'TRUE', 'FALSE', 'INT', 'STRING', 'PULSE', 'WAIT', 'SEC', 'NULLFRAME', 'THEN',
+    'CASE', 'DEFAULT', 'SWITCH', 'ENDSWITCH', 'BREAK', 'ABS', 'SIN', 'COS', 'TAN', 'ASIN', 'ACOS', 'ATAN2', 'MAX', 'MIN',
+    'DEFDAT', 'ENDDAT', 'PUBLIC', 'STRUC', 'WHEN', 'DISTANCE', 'DO', 'DELAY', 'PRIO', 'LIN', 'PTP', 'DELAY',
+    'C_PTP', 'C_LIN', 'C_VEL', 'C_DIS', 'BAS', 'LOAD', 'FRAME', 'IN', 'OUT',
+    'X', 'Y', 'Z', 'A', 'B', 'C', 'S', 'T', 'A1', 'A2', 'A3', 'A4', 'A5', 'A6', 'E1', 'E2', 'E3', 'E4', 'E5', 'E6',
+    'SQRT', 'TO', 'Axis', 'E6AXIS', 'E6POS', 'LOAD_DATA', 'BASE', 'TOOL',
+    'INVERSE', 'FORWARD', 'B_AND', 'B_OR', 'B_NOT', 'B_XOR', 'B_NAND', 'B_NOR', 'B_XNOR',
+];
+ 
+
 // =======================
 // Initialization Handlers
 // =======================
@@ -94,7 +108,10 @@ connection.onInitialize((params: InitializeParams): InitializeResult => {
       definitionProvider: true,
       hoverProvider: true,
       completionProvider: {
-        triggerCharacters: ['.']
+        triggerCharacters: [
+          '.', '(', ',', ' ', '=', '+', '-', '*', '/', '<', '>', '!',
+          ...'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_'
+        ]
       }
     }
   };
@@ -330,6 +347,10 @@ connection.onHover(async (params) => {
 // Completion Request Handler
 // ==================
 connection.onCompletion(async (params: CompletionParams): Promise<CompletionItem[]> => {
+  
+  logMsg=`On completion is called`
+  
+  logToFile(logMsg)
   const document = documents.get(params.textDocument.uri);
   if (!document) return [];
 
@@ -349,6 +370,7 @@ connection.onCompletion(async (params: CompletionParams): Promise<CompletionItem
 
   const line = lines[params.position.line];
   const textBefore = line.substring(0, params.position.character);
+  
   const dotMatch = textBefore.match(/(\w+)\.$/);
 
   const structItems: CompletionItem[] = [];
@@ -365,7 +387,7 @@ connection.onCompletion(async (params: CompletionParams): Promise<CompletionItem
       );
     }
 
-    // ✅ Only return struct completions after dot
+    // Only return struct completions after dot
     return structItems;
   }
 
@@ -381,12 +403,48 @@ connection.onCompletion(async (params: CompletionParams): Promise<CompletionItem
       insertText: `${fn.name}(${snippetParams})`,
       insertTextFormat: InsertTextFormat.Snippet,
       documentation: `User-defined function: ${fn.name}`,
-      commitCharacters: ['('], // optional: autocomplete on open-paren
+      commitCharacters: ['('],
+      filterText: fn.name,
+      sortText: fn.name
     };
   });
 
+const currentWord = textBefore.trim().split(/\s+/).pop()?.toUpperCase() || '';
+
+
+ const filtered = CODE_KEYWORDS
+    .filter(kw => kw.includes(currentWord))
+    .sort((a, b) => {
+      const aStarts = a.startsWith(currentWord);
+      const bStarts = b.startsWith(currentWord);
+      if (aStarts && !bStarts) return -1;
+      if (!aStarts && bStarts) return 1;
+      return a.localeCompare(b);
+    });
+
+  // Return as CompletionItems
+  const keywordsFiltered= filtered.map(kw => ({
+   label: kw,
+    kind: CompletionItemKind.Keyword,
+    data: kw,
+    sortText: kw,
+    filterText: kw
+  }));
+  
+  const uniqueKeywordItems = keywordsFiltered.filter(kwItem =>
+  !functionItems.some(fnItem => fnItem.label === kwItem.label)
+);
+
+
   // === 3. Return all completions (if not after a dot) ===
-  return [...functionItems, ...structItems];
+  const allItems = [...functionItems, ...structItems, ...uniqueKeywordItems];
+
+
+  logMsg=`Variable filtrées: ${JSON.stringify(allItems, null, 2)}`
+  
+  logToFile(logMsg)
+
+  return allItems;
 });
 
 
@@ -661,18 +719,7 @@ async function validateVariablesUsage(document: TextDocument, variableTypes: { [
 
   const variableRegex = /\b([a-zA-Z_]\w*)\b/g;
 
-  // Keywords and types to exclude from "used variables"
-  const keywords = new Set([
-    'GLOBAL', 'DEF', 'DEFFCT', 'END', 'ENDFCT', 'RETURN', 'TRIGGER', 
-    'REAL', 'BOOL', 'DECL', 'IF', 'ELSE', 'ENDIF', 'CONTINUE', 'FOR', 'ENDFOR', 'WHILE', 
-    'AND', 'OR', 'NOT', 'TRUE', 'FALSE', 'INT', 'STRING', 'PULSE', 'WAIT', 'SEC', 'NULLFRAME', 'THEN',
-    'CASE', 'DEFAULT', 'SWITCH', 'ENDSWITCH', 'BREAK', 'ABS', 'SIN', 'COS', 'TAN', 'ASIN', 'ACOS', 'ATAN2', 'MAX', 'MIN',
-    'DEFDAT', 'ENDDAT', 'PUBLIC', 'STRUC', 'WHEN', 'DISTANCE', 'DO', 'DELAY', 'PRIO', 'LIN', 'PTP', 'DELAY',
-    'C_PTP', 'C_LIN', 'C_VEL', 'C_DIS', 'BAS', 'LOAD', 'FRAME', 'IN', 'OUT',
-    'X', 'Y', 'Z', 'A', 'B', 'C', 'S', 'T', 'A1', 'A2', 'A3', 'A4', 'A5', 'A6', 'E1', 'E2', 'E3', 'E4', 'E5', 'E6',
-    'SQRT', 'TO', 'Axis', 'E6AXIS', 'E6POS', 'LOAD_DATA', 'BASE', 'TOOL',
-    'INVERSE', 'FORWARD', 'B_AND', 'B_OR', 'B_NOT', 'B_XOR', 'B_NAND', 'B_NOR', 'B_XNOR',
-  ]);
+
 
   for (let lineIndex = 0; lineIndex < lines.length; lineIndex++) {
     const line = lines[lineIndex];
@@ -701,7 +748,9 @@ async function validateVariablesUsage(document: TextDocument, variableTypes: { [
       if (await isFunctionDeclared(varName,"function")) continue;
 
       // Skip keywords and known types
-      if (keywords.has(varName.toUpperCase())) continue;
+      CODE_KEYWORDS.forEach(element => {        
+        if (element==varName.toUpperCase()) return;
+      });
 
       // Report undeclared variables
       if (!(varName in variableTypes)) {

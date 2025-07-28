@@ -28,6 +28,17 @@ let variableStructTypes = {};
 let structDefinitions = {};
 let functionsDeclared = [];
 let mergedVariables = [];
+const CODE_KEYWORDS = [
+    'GLOBAL', 'DEF', 'DEFFCT', 'END', 'ENDFCT', 'RETURN', 'TRIGGER',
+    'REAL', 'BOOL', 'DECL', 'IF', 'ELSE', 'ENDIF', 'CONTINUE', 'FOR', 'ENDFOR', 'WHILE',
+    'AND', 'OR', 'NOT', 'TRUE', 'FALSE', 'INT', 'STRING', 'PULSE', 'WAIT', 'SEC', 'NULLFRAME', 'THEN',
+    'CASE', 'DEFAULT', 'SWITCH', 'ENDSWITCH', 'BREAK', 'ABS', 'SIN', 'COS', 'TAN', 'ASIN', 'ACOS', 'ATAN2', 'MAX', 'MIN',
+    'DEFDAT', 'ENDDAT', 'PUBLIC', 'STRUC', 'WHEN', 'DISTANCE', 'DO', 'DELAY', 'PRIO', 'LIN', 'PTP', 'DELAY',
+    'C_PTP', 'C_LIN', 'C_VEL', 'C_DIS', 'BAS', 'LOAD', 'FRAME', 'IN', 'OUT',
+    'X', 'Y', 'Z', 'A', 'B', 'C', 'S', 'T', 'A1', 'A2', 'A3', 'A4', 'A5', 'A6', 'E1', 'E2', 'E3', 'E4', 'E5', 'E6',
+    'SQRT', 'TO', 'Axis', 'E6AXIS', 'E6POS', 'LOAD_DATA', 'BASE', 'TOOL',
+    'INVERSE', 'FORWARD', 'B_AND', 'B_OR', 'B_NOT', 'B_XOR', 'B_NAND', 'B_NOR', 'B_XNOR',
+];
 // =======================
 // Initialization Handlers
 // =======================
@@ -44,7 +55,10 @@ connection.onInitialize((params) => {
             definitionProvider: true,
             hoverProvider: true,
             completionProvider: {
-                triggerCharacters: ['.']
+                triggerCharacters: [
+                    '.', '(', ',', ' ', '=', '+', '-', '*', '/', '<', '>', '!',
+                    ...'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_'
+                ]
             }
         }
     };
@@ -233,6 +247,9 @@ connection.onHover((params) => __awaiter(void 0, void 0, void 0, function* () {
 // Completion Request Handler
 // ==================
 connection.onCompletion((params) => __awaiter(void 0, void 0, void 0, function* () {
+    var _d;
+    logMsg = `On completion is called`;
+    logToFile(logMsg);
     const document = documents.get(params.textDocument.uri);
     if (!document)
         return [];
@@ -262,7 +279,7 @@ connection.onCompletion((params) => __awaiter(void 0, void 0, void 0, function* 
                 kind: node_1.CompletionItemKind.Field
             })));
         }
-        // ✅ Only return struct completions after dot
+        // Only return struct completions after dot
         return structItems;
     }
     // === 2. Function completions ===
@@ -276,11 +293,37 @@ connection.onCompletion((params) => __awaiter(void 0, void 0, void 0, function* 
             insertText: `${fn.name}(${snippetParams})`,
             insertTextFormat: node_1.InsertTextFormat.Snippet,
             documentation: `User-defined function: ${fn.name}`,
-            commitCharacters: ['('], // optional: autocomplete on open-paren
+            commitCharacters: ['('],
+            filterText: fn.name,
+            sortText: fn.name
         };
     });
+    const currentWord = ((_d = textBefore.trim().split(/\s+/).pop()) === null || _d === void 0 ? void 0 : _d.toUpperCase()) || '';
+    const filtered = CODE_KEYWORDS
+        .filter(kw => kw.includes(currentWord))
+        .sort((a, b) => {
+        const aStarts = a.startsWith(currentWord);
+        const bStarts = b.startsWith(currentWord);
+        if (aStarts && !bStarts)
+            return -1;
+        if (!aStarts && bStarts)
+            return 1;
+        return a.localeCompare(b);
+    });
+    // Return as CompletionItems
+    const keywordsFiltered = filtered.map(kw => ({
+        label: kw,
+        kind: node_1.CompletionItemKind.Keyword,
+        data: kw,
+        sortText: kw,
+        filterText: kw
+    }));
+    const uniqueKeywordItems = keywordsFiltered.filter(kwItem => !functionItems.some(fnItem => fnItem.label === kwItem.label));
     // === 3. Return all completions (if not after a dot) ===
-    return [...functionItems, ...structItems];
+    const allItems = [...functionItems, ...structItems, ...uniqueKeywordItems];
+    logMsg = `Variable filtrées: ${JSON.stringify(allItems, null, 2)}`;
+    logToFile(logMsg);
+    return allItems;
 }));
 function getAllFunctionDeclarations() {
     return __awaiter(this, void 0, void 0, function* () {
@@ -506,18 +549,6 @@ function validateVariablesUsage(document, variableTypes) {
         const text = document.getText();
         const lines = text.split(/\r?\n/);
         const variableRegex = /\b([a-zA-Z_]\w*)\b/g;
-        // Keywords and types to exclude from "used variables"
-        const keywords = new Set([
-            'GLOBAL', 'DEF', 'DEFFCT', 'END', 'ENDFCT', 'RETURN', 'TRIGGER',
-            'REAL', 'BOOL', 'DECL', 'IF', 'ELSE', 'ENDIF', 'CONTINUE', 'FOR', 'ENDFOR', 'WHILE',
-            'AND', 'OR', 'NOT', 'TRUE', 'FALSE', 'INT', 'STRING', 'PULSE', 'WAIT', 'SEC', 'NULLFRAME', 'THEN',
-            'CASE', 'DEFAULT', 'SWITCH', 'ENDSWITCH', 'BREAK', 'ABS', 'SIN', 'COS', 'TAN', 'ASIN', 'ACOS', 'ATAN2', 'MAX', 'MIN',
-            'DEFDAT', 'ENDDAT', 'PUBLIC', 'STRUC', 'WHEN', 'DISTANCE', 'DO', 'DELAY', 'PRIO', 'LIN', 'PTP', 'DELAY',
-            'C_PTP', 'C_LIN', 'C_VEL', 'C_DIS', 'BAS', 'LOAD', 'FRAME', 'IN', 'OUT',
-            'X', 'Y', 'Z', 'A', 'B', 'C', 'S', 'T', 'A1', 'A2', 'A3', 'A4', 'A5', 'A6', 'E1', 'E2', 'E3', 'E4', 'E5', 'E6',
-            'SQRT', 'TO', 'Axis', 'E6AXIS', 'E6POS', 'LOAD_DATA', 'BASE', 'TOOL',
-            'INVERSE', 'FORWARD', 'B_AND', 'B_OR', 'B_NOT', 'B_XOR', 'B_NAND', 'B_NOR', 'B_XNOR',
-        ]);
         for (let lineIndex = 0; lineIndex < lines.length; lineIndex++) {
             const line = lines[lineIndex];
             // Skip lines with declarations or structs or signals
@@ -542,8 +573,10 @@ function validateVariablesUsage(document, variableTypes) {
                 if (yield isFunctionDeclared(varName, "function"))
                     continue;
                 // Skip keywords and known types
-                if (keywords.has(varName.toUpperCase()))
-                    continue;
+                CODE_KEYWORDS.forEach(element => {
+                    if (element == varName.toUpperCase())
+                        return;
+                });
                 // Report undeclared variables
                 if (!(varName in variableTypes)) {
                     const newDiagnostic = {
