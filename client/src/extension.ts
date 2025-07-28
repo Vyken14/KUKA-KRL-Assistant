@@ -6,6 +6,7 @@ import {
   TransportKind
 } from 'vscode-languageclient/node';
 import * as path from 'path';
+import * as fs from 'fs';
 
 // Diagnostic collection for KRL language
 const diagnosticCollection = vscode.languages.createDiagnosticCollection('krl');
@@ -34,15 +35,6 @@ export function activate(context: vscode.ExtensionContext) {
 
   // Create the language client
   client = new LanguageClient('kukaKRL', 'KUKA KRL Language Server', serverOptions, clientOptions);
-
-  // Register definition provider
-  context.subscriptions.push(
-    vscode.languages.registerDefinitionProvider('krl', {
-      async provideDefinition(document, position) {
-        return provideDefinitionHandler(document, position);
-      }
-    })
-  );
 
   // Register event handlers for document open/change/save
   context.subscriptions.push(
@@ -90,69 +82,6 @@ export function activate(context: vscode.ExtensionContext) {
 
   // Dispose the diagnostic collection on extension deactivate
   context.subscriptions.push(diagnosticCollection);
-}
-
-/**
- * Handler for providing definition locations for a symbol in a document
- */
-async function provideDefinitionHandler(
-  document: vscode.TextDocument,
-  position: vscode.Position
-): Promise<vscode.Location | null | undefined> {
-  const wordRange = document.getWordRangeAtPosition(position);
-  if (!wordRange) return null;
-
-  const word = document.getText(wordRange);
-  const lines = document.getText().split('\n');
-
-  // Search current document for DECL, SIGNAL or STRUC lines containing the word
-  for (let i = 0; i < lines.length; i++) {
-    const rawLine = lines[i];
-    const line = rawLine.trim();
-
-    if ((line.startsWith('DECL') || line.startsWith('SIGNAL') || line.startsWith('STRUC')) && line.includes(word)) {
-      const varRegex = new RegExp(`\\b${word}\\b`);
-      if (varRegex.test(line)) {
-        const startIdx = rawLine.indexOf(word);
-        if (startIdx >= 0) {
-          return new vscode.Location(
-            document.uri,
-            new vscode.Range(new vscode.Position(i, startIdx), new vscode.Position(i, startIdx + word.length))
-          );
-        }
-      }
-    }
-  }
-
-  // If not found in current doc, search other workspace files of relevant extensions
-  const files = await vscode.workspace.findFiles('**/*.{src,dat,sub}', '**/node_modules/**');
-
-  for (const file of files) {
-    if (file.fsPath === document.uri.fsPath) continue; // Skip current document
-
-    const otherDoc = await vscode.workspace.openTextDocument(file);
-    const otherLines = otherDoc.getText().split('\n');
-
-    for (let i = 0; i < otherLines.length; i++) {
-      const rawLine = otherLines[i];
-      const line = rawLine.trim();
-
-      if ((line.startsWith('DECL') || line.startsWith('SIGNAL') || line.startsWith('STRUC')) && line.includes(word)) {
-        const varRegex = new RegExp(`\\b${word}\\b`);
-        if (varRegex.test(line)) {
-          const startIdx = rawLine.indexOf(word);
-          if (startIdx >= 0) {
-            return new vscode.Location(
-              file,
-              new vscode.Range(new vscode.Position(i, startIdx), new vscode.Position(i, startIdx + word.length))
-            );
-          }
-        }
-      }
-    }
-  }
-
-  return null;
 }
 
 /**
@@ -246,6 +175,15 @@ async function validateAllKrlFiles(): Promise<void> {
       console.error(`Failed to validate ${file.fsPath}`, error);
     }
   }
+}
+
+/**
+ * Append a timestamped message to the log file.
+ */
+
+const logFile = path.join(__dirname, 'krl-extension.log');
+function logToFile(message: string) {
+  fs.appendFileSync(logFile, `[${new Date().toISOString()}] ${message}\n`);
 }
 
 /**

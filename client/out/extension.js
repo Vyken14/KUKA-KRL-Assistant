@@ -13,6 +13,7 @@ exports.deactivate = exports.activate = void 0;
 const vscode = require("vscode");
 const node_1 = require("vscode-languageclient/node");
 const path = require("path");
+const fs = require("fs");
 // Diagnostic collection for KRL language
 const diagnosticCollection = vscode.languages.createDiagnosticCollection('krl');
 let client;
@@ -36,14 +37,6 @@ function activate(context) {
     };
     // Create the language client
     client = new node_1.LanguageClient('kukaKRL', 'KUKA KRL Language Server', serverOptions, clientOptions);
-    // Register definition provider
-    context.subscriptions.push(vscode.languages.registerDefinitionProvider('krl', {
-        provideDefinition(document, position) {
-            return __awaiter(this, void 0, void 0, function* () {
-                return provideDefinitionHandler(document, position);
-            });
-        }
-    }));
     // Register event handlers for document open/change/save
     context.subscriptions.push(vscode.workspace.onDidOpenTextDocument(document => {
         if (document.languageId === 'krl') {
@@ -81,54 +74,6 @@ function activate(context) {
     context.subscriptions.push(diagnosticCollection);
 }
 exports.activate = activate;
-/**
- * Handler for providing definition locations for a symbol in a document
- */
-function provideDefinitionHandler(document, position) {
-    return __awaiter(this, void 0, void 0, function* () {
-        const wordRange = document.getWordRangeAtPosition(position);
-        if (!wordRange)
-            return null;
-        const word = document.getText(wordRange);
-        const lines = document.getText().split('\n');
-        // Search current document for DECL, SIGNAL or STRUC lines containing the word
-        for (let i = 0; i < lines.length; i++) {
-            const rawLine = lines[i];
-            const line = rawLine.trim();
-            if ((line.startsWith('DECL') || line.startsWith('SIGNAL') || line.startsWith('STRUC')) && line.includes(word)) {
-                const varRegex = new RegExp(`\\b${word}\\b`);
-                if (varRegex.test(line)) {
-                    const startIdx = rawLine.indexOf(word);
-                    if (startIdx >= 0) {
-                        return new vscode.Location(document.uri, new vscode.Range(new vscode.Position(i, startIdx), new vscode.Position(i, startIdx + word.length)));
-                    }
-                }
-            }
-        }
-        // If not found in current doc, search other workspace files of relevant extensions
-        const files = yield vscode.workspace.findFiles('**/*.{src,dat,sub}', '**/node_modules/**');
-        for (const file of files) {
-            if (file.fsPath === document.uri.fsPath)
-                continue; // Skip current document
-            const otherDoc = yield vscode.workspace.openTextDocument(file);
-            const otherLines = otherDoc.getText().split('\n');
-            for (let i = 0; i < otherLines.length; i++) {
-                const rawLine = otherLines[i];
-                const line = rawLine.trim();
-                if ((line.startsWith('DECL') || line.startsWith('SIGNAL') || line.startsWith('STRUC')) && line.includes(word)) {
-                    const varRegex = new RegExp(`\\b${word}\\b`);
-                    if (varRegex.test(line)) {
-                        const startIdx = rawLine.indexOf(word);
-                        if (startIdx >= 0) {
-                            return new vscode.Location(file, new vscode.Range(new vscode.Position(i, startIdx), new vscode.Position(i, startIdx + word.length)));
-                        }
-                    }
-                }
-            }
-        }
-        return null;
-    });
-}
 /**
  * Validate a single KRL text document
  * Produces diagnostics for variable name length and improper GLOBAL usage
@@ -206,6 +151,13 @@ function validateAllKrlFiles() {
             }
         }
     });
+}
+/**
+ * Append a timestamped message to the log file.
+ */
+const logFile = path.join(__dirname, 'krl-extension.log');
+function logToFile(message) {
+    fs.appendFileSync(logFile, `[${new Date().toISOString()}] ${message}\n`);
 }
 /**
  * Extension deactivation handler

@@ -34,6 +34,7 @@ const documents: TextDocuments<TextDocument> = new TextDocuments(TextDocument);
 let workspaceRoot: string | null = null;
 const fileVariablesMap: Map<string, VariableInfo[]> = new Map();
 const logFile = path.join(__dirname, 'krl-server.log');
+let logMsg="";
 
 // Types
 interface VariableInfo {
@@ -55,13 +56,25 @@ interface FunctionDeclaration {
   startChar: number;
   endChar: number;
   params: string;
+  name: string;
+}
+
+
+interface WordInfo {
+  word: string;
+  isSubvariable: boolean;
+}
+
+interface EnclosuresLines {
+  upperLine: number;
+  bottomLine: number;
 }
 
 // Variables and struct maps (updated dynamically)
 let variableStructTypes: VariableToStructMap = {};
 let structDefinitions: StructMap = {};  
 let functionsDeclared: FunctionDeclaration[] = [];
-
+let mergedVariables :VariableInfo[] = [];
 // =======================
 // Initialization Handlers
 // =======================
@@ -104,11 +117,11 @@ connection.onInitialized(async () => {
     collector.extractFromText(content);
     fileVariablesMap.set(uri, collector.getVariables());
     functionsDeclared = await getAllFunctionDeclarations();
-    logToFile(`Extracted functions from : ${JSON.stringify(functionsDeclared, null, 2)}`);
+    //logToFile(`Extracted functions from : ${JSON.stringify(functionsDeclared, null, 2)}`);
   }
 
   // Step 2: Merge and log variables for all files
-  const mergedVariables = mergeAllVariables(fileVariablesMap);
+  mergedVariables = mergeAllVariables(fileVariablesMap);
   //logToFile(`Merged variables: ${JSON.stringify(mergedVariables, null, 2)}`);
 
   // Step 3: Optionally validate each file with merged variables (commented out)
@@ -141,7 +154,8 @@ documents.onDidChangeContent(async change => {
   collector.extractFromText(document.getText());
   fileVariablesMap.set(document.uri, collector.getVariables());
 
-  const mergedVariables = mergeAllVariables(fileVariablesMap);
+  mergedVariables = mergeAllVariables(fileVariablesMap);
+  //logToFile(`Extracted variables: ${JSON.stringify(mergedVariables, null, 2)}`);
   // const diagnostics = await validateVariablesUsage(document, mergedVariables);
   // connection.sendDiagnostics({ uri: document.uri, diagnostics });
 });
@@ -175,16 +189,21 @@ function getAllDatFiles(dir: string): string[] {
 /**
  * Merge all variables from multiple files into a single map.
  */
-function mergeAllVariables(map: Map<string, VariableInfo[]>): { [varName: string]: string } {
-  const result: { [varName: string]: string } = {};
+function mergeAllVariables(map: Map<string, VariableInfo[]>): VariableInfo[] {
+  const result: VariableInfo[] = [];
+  const seen = new Set<string>();
+
   for (const vars of map.values()) {
     for (const v of vars) {
-      result[v.name] = v.type || '';
+      if (!seen.has(v.name)) {
+        seen.add(v.name);
+        result.push({ name: v.name, type: v.type || '' });
+      }
     }
   }
+
   return result;
 }
-
 /**
  * Append a timestamped message to the log file.
  */
@@ -205,20 +224,80 @@ connection.onDefinition(
     const lineText = lines[params.position.line];
 
     // Ignore certain declarations lines
-    if (/^\s*(GLOBAL\s+)?(DEF|DEFFCT|DECL|SIGNAL|STRUC)\b/i.test(lineText)) return;
+    if (/^\s*(GLOBAL\s+)?(DEF|DEFFCT|DECL INT|DECL REAL|DECL BOOL|DECL FRAME)\b/i.test(lineText)) return;
 
-    const functionName = getWordAtPosition(lineText, params.position.character);
-    if (!functionName) return;
+    //Avoid looking for subvariables inside struc    
+    if (getWordAtPosition(lineText, params.position.character)?.isSubvariable) {
+      return;
+    }
 
-    const result = await isFunctionDeclared(functionName);
-    if (!result) return;
+    const functionName = getWordAtPosition(lineText, params.position.character)?.word;
+    if (!functionName) return;  
+    
 
-    return Location.create(result.uri, {
-      start: Position.create(result.line, result.startChar),
-      end: Position.create(result.line, result.endChar)
-    });
+    //Search for name as function first
+    const resultFct = await isFunctionDeclared(functionName,"function");
+    if (resultFct!=undefined) {
+      return Location.create(resultFct.uri, {
+        start: Position.create(resultFct.line, resultFct.startChar),
+        end: Position.create(resultFct.line, resultFct.endChar)
+      });
+    }
+    
+    
+    //Search for name as custom user variable type
+    for (const key in structDefinitions) {
+      if (key === functionName) { 
+        const resultStruc = await isFunctionDeclared(functionName,"struc");   
+        if (resultStruc!=undefined) {
+          return Location.create(resultStruc.uri, {
+            start: Position.create(resultStruc.line, resultStruc.startChar),
+            end: Position.create(resultStruc.line, resultStruc.endChar)
+          });
+        }
+      }
+    }
+
+    //Search for name as variable    
+    let enclosures = findEnclosuresLines(params.position.line, lines);
+    // First, try mergedVariables list
+    for (const element of mergedVariables) {
+      if (element.name === functionName) {
+        // First: try local scope (inside enclosures)
+        const scopedResult = await isFunctionDeclared(
+          functionName,
+          "variable",
+          params.textDocument.uri,
+          enclosures.upperLine,
+          enclosures.bottomLine,
+          lines.join('\n')
+        );
+
+        if (scopedResult) {
+          return Location.create(scopedResult.uri, {
+            start: Position.create(scopedResult.line, scopedResult.startChar),
+            end: Position.create(scopedResult.line, scopedResult.endChar)
+          });
+        }
+
+        // If not found locally, try global search
+        const resultVar = await isFunctionDeclared(functionName, "variable");
+
+        if (resultVar) {
+          return Location.create(resultVar.uri, {
+            start: Position.create(resultVar.line, resultVar.startChar),
+            end: Position.create(resultVar.line, resultVar.endChar)
+          });
+        }
+      }
+    }
+
+
+    return;
+    
   }
 );
+
 
 // ===================
 // Hover Request Handler
@@ -233,10 +312,10 @@ connection.onHover(async (params) => {
 
   if (/^\s*(GLOBAL\s+)?(DEF|DEFFCT|DECL|SIGNAL|STRUC)\b/i.test(lineText)) return;
 
-  const functionName = getWordAtPosition(lineText, params.position.character);
+  const functionName = getWordAtPosition(lineText, params.position.character)?.word;
   if (!functionName) return;
 
-  const result = await isFunctionDeclared(functionName);
+  const result = await isFunctionDeclared(functionName,"function");
   if (!result) return;
 
   return {
@@ -311,16 +390,6 @@ connection.onCompletion(async (params: CompletionParams): Promise<CompletionItem
 });
 
 
-
-interface FunctionDeclaration {
-  uri: string;
-  line: number;
-  startChar: number;
-  endChar: number;
-  params: string;
-  name: string;
-}
-
 async function getAllFunctionDeclarations(): Promise<FunctionDeclaration[]> {
   if (!workspaceRoot) return [];
 
@@ -365,10 +434,50 @@ async function getAllFunctionDeclarations(): Promise<FunctionDeclaration[]> {
 // Utility Functions
 // =========================
 
+
+/**
+ * Find DEF, DEFCT, DETDAT enclosures lines
+ */
+
+function findEnclosuresLines(lineNumber: number, lines: string[]): EnclosuresLines {
+  let row = lineNumber;
+  let result: EnclosuresLines = {
+    upperLine: 0,
+    bottomLine: lines.length - 1
+  };
+
+  // Search upwards
+  while (row >= 0) {
+    if (lines[row].includes("DEFFCT") || lines[row].includes("DEF") || lines[row].includes("DEFDAT")) {
+      result.upperLine = row+1;
+      break;
+    }
+    row--;
+  }
+
+  // Reset row to start from original position
+  row = lineNumber;
+
+  // Search downwards
+  while (row < lines.length) {
+    if (lines[row].includes("ENDFCT") || lines[row].includes("END") || lines[row].includes("ENDDAT")) {
+      result.bottomLine = row+1;
+      break;
+    }
+    row++;
+  }
+
+  return result;
+}
+
+
+
+
 /**
  * Extract the word at a given character position in a line.
  */
-function getWordAtPosition(lineText: string, character: number): string | undefined {
+
+function getWordAtPosition(lineText: string, character: number): WordInfo | undefined {
   const wordMatch = lineText.match(/\b(\w+)\b/g);
   if (!wordMatch) return;
 
@@ -377,7 +486,11 @@ function getWordAtPosition(lineText: string, character: number): string | undefi
     const start = lineText.indexOf(w, charCount);
     const end = start + w.length;
     if (character >= start && character <= end) {
-      return w;
+      const isSubvariable = start > 0 && lineText[start - 1] === '.';
+      return {
+        word: w,
+        isSubvariable
+      };
     }
     charCount = end;
   }
@@ -409,29 +522,50 @@ async function findSrcFiles(dir: string): Promise<string[]> {
 
 /**
  * Check if a function with given name is declared in any source file.
- */
-async function isFunctionDeclared(name: string): Promise<FunctionDeclaration | undefined> {
+ */async function isFunctionDeclared(
+  name: string,
+  mode: string,
+  scopedFilePath?: string,
+  lineStart?: number,
+  lineEnd?: number,
+  fileContentOverride?: string
+): Promise<FunctionDeclaration | undefined> {
   if (!workspaceRoot) return undefined;
 
-  const files = await findSrcFiles(workspaceRoot);
-  const defRegex = new RegExp(`\\b(GLOBAL\\s+)?(DEF|DEFFCT)\\s+(\\w+\\s+)?${name}\\s*\\(([^)]*)\\)`, 'i');
+  const defRegex = mode === "struc"
+    ? new RegExp(`\\b(?:GLOBAL\\s+)?(?:STRUC)\\s+${name}\\b`, 'i')
+    : mode === "variable"
+    ? new RegExp(`\\b(?:GLOBAL\\s+)?(?:DECL|SIGNAL)\\b[^\\n]*\\b${name}\\b`, 'i')
+    : mode === "function"
+    ? new RegExp(`\\b(GLOBAL\\s+)?(DEF|DEFFCT)\\s+(\\w+\\s+)?${name}\\s*\\(([^)]*)\\)`, 'i')
+    : undefined;
+
+  if (!defRegex) return undefined;
+
+  const files = scopedFilePath ? [scopedFilePath] : await findSrcFiles(workspaceRoot);
 
   for (const filePath of files) {
-    const content = fs.readFileSync(filePath, 'utf8');
+    const content = fileContentOverride ?? fs.readFileSync(filePath, 'utf8');
     const fileLines = content.split(/\r?\n/);
-    for (let i = 0; i < fileLines.length; i++) {
+    
+    const start = lineStart ?? 0;
+    const end = lineEnd ?? fileLines.length;
+
+    for (let i = start; i <= end && i < fileLines.length; i++) {
       const defLine = fileLines[i];
       const match = defLine.match(defRegex);
       if (match) {
-        const uri = URI.file(filePath).toString();
+        const uri = filePath.startsWith("file://") ? filePath : URI.file(filePath).toString();
         const startChar = defLine.indexOf(name);
+        const params = (mode === 'function' && match[4]) ? match[4].trim() : '';
+
         return {
           uri,
           line: i,
           startChar,
           endChar: startChar + name.length,
-          params: match[4].trim(),
-          name: name
+          params,
+          name
         };
       }
     }
@@ -439,6 +573,7 @@ async function isFunctionDeclared(name: string): Promise<FunctionDeclaration | u
 
   return undefined;
 }
+
 
 // =====================
 // Diagnostics & Validation
@@ -563,7 +698,7 @@ async function validateVariablesUsage(document: TextDocument, variableTypes: { [
       if (match.index !== undefined && match.index > 0 && (line[match.index - 1] === '$' || line[match.index - 1] === '#')) continue;
 
       // Skip known function names
-      if (await isFunctionDeclared(varName)) continue;
+      if (await isFunctionDeclared(varName,"function")) continue;
 
       // Skip keywords and known types
       if (keywords.has(varName.toUpperCase())) continue;
