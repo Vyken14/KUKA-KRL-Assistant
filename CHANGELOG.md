@@ -3,6 +3,12 @@
 All notable changes to this project will be documented in this file.
 ---
 
+## [1.4.3] - 2025-07-28
+### Fixed
+- Autocompletion via Intellisense didn't show Keywords when written
+
+---
+
 ## [1.4.2] - 2025-07-28
 ### Fixed
 - `Go to Definition` didn't work properly for variable or custom variable type
