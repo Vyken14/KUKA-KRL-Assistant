@@ -186,8 +186,6 @@ connection.onDefinition((params) => __awaiter(void 0, void 0, void 0, function* 
         if (element.name === functionName) {
             // First: try local scope (inside enclosures)
             const scopedResult = yield isFunctionDeclared(functionName, "variable", params.textDocument.uri, enclosures.upperLine, enclosures.bottomLine, lines.join('\n'));
-            logMsg = "Location : ", scopedResult === null || scopedResult === void 0 ? void 0 : scopedResult.uri;
-            logToFile(logMsg);
             if (scopedResult) {
                 return node_1.Location.create(scopedResult.uri, {
                     start: node_1.Position.create(scopedResult.line, scopedResult.startChar),
@@ -397,8 +395,6 @@ function findSrcFiles(dir) {
  * Check if a function with given name is declared in any source file.
  */ function isFunctionDeclared(name, mode, scopedFilePath, lineStart, lineEnd, fileContentOverride) {
     return __awaiter(this, void 0, void 0, function* () {
-        logMsg = "Uri asked " + scopedFilePath;
-        logToFile(logMsg);
         if (!workspaceRoot)
             return undefined;
         const defRegex = mode === "struc"
@@ -423,8 +419,6 @@ function findSrcFiles(dir) {
                     const uri = filePath.startsWith("file://") ? filePath : vscode_uri_1.URI.file(filePath).toString();
                     const startChar = defLine.indexOf(name);
                     const params = (mode === 'function' && match[4]) ? match[4].trim() : '';
-                    logMsg = "Uri found " + uri;
-                    logToFile(logMsg);
                     return {
                         uri,
                         line: i,
