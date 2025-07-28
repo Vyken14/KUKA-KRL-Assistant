@@ -223,8 +223,6 @@ connection.onDefinition(
     const lines = doc.getText().split(/\r?\n/);
     const lineText = lines[params.position.line];
 
-    let enclosures=findEnclosuresLines(params.position.line,lines)
-
     // Ignore certain declarations lines
     if (/^\s*(GLOBAL\s+)?(DEF|DEFFCT|DECL INT|DECL REAL|DECL BOOL|DECL FRAME)\b/i.test(lineText)) return;
 
@@ -261,10 +259,31 @@ connection.onDefinition(
     }
 
     //Search for name as variable    
+    let enclosures = findEnclosuresLines(params.position.line, lines);
+    // First, try mergedVariables list
     for (const element of mergedVariables) {
       if (element.name === functionName) {
+        // First: try local scope (inside enclosures)
+        const scopedResult = await isFunctionDeclared(
+          functionName,
+          "variable",
+          params.textDocument.uri,
+          enclosures.upperLine,
+          enclosures.bottomLine,
+          lines.join('\n')
+        );
+
+        if (scopedResult) {
+          return Location.create(scopedResult.uri, {
+            start: Position.create(scopedResult.line, scopedResult.startChar),
+            end: Position.create(scopedResult.line, scopedResult.endChar)
+          });
+        }
+
+        // If not found locally, try global search
         const resultVar = await isFunctionDeclared(functionName, "variable");
-        if (resultVar !== undefined) {
+
+        if (resultVar) {
           return Location.create(resultVar.uri, {
             start: Position.create(resultVar.line, resultVar.startChar),
             end: Position.create(resultVar.line, resultVar.endChar)
@@ -272,6 +291,8 @@ connection.onDefinition(
         }
       }
     }
+
+
     return;
     
   }
@@ -501,46 +522,50 @@ async function findSrcFiles(dir: string): Promise<string[]> {
 
 /**
  * Check if a function with given name is declared in any source file.
- */
-async function isFunctionDeclared(name: string, mode: string): Promise<FunctionDeclaration | undefined> {
+ */async function isFunctionDeclared(
+  name: string,
+  mode: string,
+  scopedFilePath?: string,
+  lineStart?: number,
+  lineEnd?: number,
+  fileContentOverride?: string
+): Promise<FunctionDeclaration | undefined> {
   if (!workspaceRoot) return undefined;
 
-  const files = await findSrcFiles(workspaceRoot);
-  let defRegex = new RegExp(` `);
-  if (mode=="struc") {
-    defRegex = new RegExp(`\\b(?:GLOBAL\\s+)?(?:STRUC)\\s+${name}\\b`, 'i');  
-  }
-  else if (mode=="variable") {
-    defRegex = new RegExp(`\\b(?:GLOBAL\\s+)?(?:DECL|SIGNAL)\\b[^\\n]*\\b${name}\\b`, 'i');
-  }
-  else if (mode=="function") {    
-    defRegex = new RegExp(`\\b(GLOBAL\\s+)?(DEF|DEFFCT)\\s+(\\w+\\s+)?${name}\\s*\\(([^)]*)\\)`, 'i');
-  }
-  else{
-    return undefined;
-  }
+  const defRegex = mode === "struc"
+    ? new RegExp(`\\b(?:GLOBAL\\s+)?(?:STRUC)\\s+${name}\\b`, 'i')
+    : mode === "variable"
+    ? new RegExp(`\\b(?:GLOBAL\\s+)?(?:DECL|SIGNAL)\\b[^\\n]*\\b${name}\\b`, 'i')
+    : mode === "function"
+    ? new RegExp(`\\b(GLOBAL\\s+)?(DEF|DEFFCT)\\s+(\\w+\\s+)?${name}\\s*\\(([^)]*)\\)`, 'i')
+    : undefined;
+
+  if (!defRegex) return undefined;
+
+  const files = scopedFilePath ? [scopedFilePath] : await findSrcFiles(workspaceRoot);
 
   for (const filePath of files) {
-    const content = fs.readFileSync(filePath, 'utf8');
+    const content = fileContentOverride ?? fs.readFileSync(filePath, 'utf8');
     const fileLines = content.split(/\r?\n/);
-    for (let i = 0; i < fileLines.length; i++) {
+    
+    const start = lineStart ?? 0;
+    const end = lineEnd ?? fileLines.length;
+
+    for (let i = start; i <= end && i < fileLines.length; i++) {
       const defLine = fileLines[i];
       const match = defLine.match(defRegex);
       if (match) {
-        const uri = URI.file(filePath).toString();
+        const uri = filePath.startsWith("file://") ? filePath : URI.file(filePath).toString();
         const startChar = defLine.indexOf(name);
-        
-        let params="";
-        if (mode=='function') {
-          params=match[4].trim();
-        }
+        const params = (mode === 'function' && match[4]) ? match[4].trim() : '';
+
         return {
           uri,
           line: i,
           startChar,
           endChar: startChar + name.length,
-          params: params,
-          name: name
+          params,
+          name
         };
       }
     }
@@ -548,6 +573,7 @@ async function isFunctionDeclared(name: string, mode: string): Promise<FunctionD
 
   return undefined;
 }
+
 
 // =====================
 // Diagnostics & Validation

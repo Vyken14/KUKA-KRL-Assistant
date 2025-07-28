@@ -149,9 +149,6 @@ connection.onDefinition((params) => __awaiter(void 0, void 0, void 0, function* 
         return;
     const lines = doc.getText().split(/\r?\n/);
     const lineText = lines[params.position.line];
-    let enclosures = findEnclosuresLines(params.position.line, lines);
-    logMsg = "Enclosures : " + enclosures.bottomLine + ' - ' + enclosures.upperLine;
-    logToFile(logMsg);
     // Ignore certain declarations lines
     if (/^\s*(GLOBAL\s+)?(DEF|DEFFCT|DECL INT|DECL REAL|DECL BOOL|DECL FRAME)\b/i.test(lineText))
         return;
@@ -183,10 +180,23 @@ connection.onDefinition((params) => __awaiter(void 0, void 0, void 0, function* 
         }
     }
     //Search for name as variable    
+    let enclosures = findEnclosuresLines(params.position.line, lines);
+    // First, try mergedVariables list
     for (const element of mergedVariables) {
         if (element.name === functionName) {
+            // First: try local scope (inside enclosures)
+            const scopedResult = yield isFunctionDeclared(functionName, "variable", params.textDocument.uri, enclosures.upperLine, enclosures.bottomLine, lines.join('\n'));
+            logMsg = "Location : ", scopedResult === null || scopedResult === void 0 ? void 0 : scopedResult.uri;
+            logToFile(logMsg);
+            if (scopedResult) {
+                return node_1.Location.create(scopedResult.uri, {
+                    start: node_1.Position.create(scopedResult.line, scopedResult.startChar),
+                    end: node_1.Position.create(scopedResult.line, scopedResult.endChar)
+                });
+            }
+            // If not found locally, try global search
             const resultVar = yield isFunctionDeclared(functionName, "variable");
-            if (resultVar !== undefined) {
+            if (resultVar) {
                 return node_1.Location.create(resultVar.uri, {
                     start: node_1.Position.create(resultVar.line, resultVar.startChar),
                     end: node_1.Position.create(resultVar.line, resultVar.endChar)
@@ -321,7 +331,7 @@ function findEnclosuresLines(lineNumber, lines) {
     // Search upwards
     while (row >= 0) {
         if (lines[row].includes("DEFFCT") || lines[row].includes("DEF") || lines[row].includes("DEFDAT")) {
-            result.upperLine = row;
+            result.upperLine = row + 1;
             break;
         }
         row--;
@@ -331,7 +341,7 @@ function findEnclosuresLines(lineNumber, lines) {
     // Search downwards
     while (row < lines.length) {
         if (lines[row].includes("ENDFCT") || lines[row].includes("END") || lines[row].includes("ENDDAT")) {
-            result.bottomLine = row;
+            result.bottomLine = row + 1;
             break;
         }
         row++;
@@ -385,45 +395,43 @@ function findSrcFiles(dir) {
 }
 /**
  * Check if a function with given name is declared in any source file.
- */
-function isFunctionDeclared(name, mode) {
+ */ function isFunctionDeclared(name, mode, scopedFilePath, lineStart, lineEnd, fileContentOverride) {
     return __awaiter(this, void 0, void 0, function* () {
+        logMsg = "Uri asked " + scopedFilePath;
+        logToFile(logMsg);
         if (!workspaceRoot)
             return undefined;
-        const files = yield findSrcFiles(workspaceRoot);
-        let defRegex = new RegExp(` `);
-        if (mode == "struc") {
-            defRegex = new RegExp(`\\b(?:GLOBAL\\s+)?(?:STRUC)\\s+${name}\\b`, 'i');
-        }
-        else if (mode == "variable") {
-            defRegex = new RegExp(`\\b(?:GLOBAL\\s+)?(?:DECL|SIGNAL)\\b[^\\n]*\\b${name}\\b`, 'i');
-        }
-        else if (mode == "function") {
-            defRegex = new RegExp(`\\b(GLOBAL\\s+)?(DEF|DEFFCT)\\s+(\\w+\\s+)?${name}\\s*\\(([^)]*)\\)`, 'i');
-        }
-        else {
+        const defRegex = mode === "struc"
+            ? new RegExp(`\\b(?:GLOBAL\\s+)?(?:STRUC)\\s+${name}\\b`, 'i')
+            : mode === "variable"
+                ? new RegExp(`\\b(?:GLOBAL\\s+)?(?:DECL|SIGNAL)\\b[^\\n]*\\b${name}\\b`, 'i')
+                : mode === "function"
+                    ? new RegExp(`\\b(GLOBAL\\s+)?(DEF|DEFFCT)\\s+(\\w+\\s+)?${name}\\s*\\(([^)]*)\\)`, 'i')
+                    : undefined;
+        if (!defRegex)
             return undefined;
-        }
+        const files = scopedFilePath ? [scopedFilePath] : yield findSrcFiles(workspaceRoot);
         for (const filePath of files) {
-            const content = fs.readFileSync(filePath, 'utf8');
+            const content = fileContentOverride !== null && fileContentOverride !== void 0 ? fileContentOverride : fs.readFileSync(filePath, 'utf8');
             const fileLines = content.split(/\r?\n/);
-            for (let i = 0; i < fileLines.length; i++) {
+            const start = lineStart !== null && lineStart !== void 0 ? lineStart : 0;
+            const end = lineEnd !== null && lineEnd !== void 0 ? lineEnd : fileLines.length;
+            for (let i = start; i <= end && i < fileLines.length; i++) {
                 const defLine = fileLines[i];
                 const match = defLine.match(defRegex);
                 if (match) {
-                    const uri = vscode_uri_1.URI.file(filePath).toString();
+                    const uri = filePath.startsWith("file://") ? filePath : vscode_uri_1.URI.file(filePath).toString();
                     const startChar = defLine.indexOf(name);
-                    let params = "";
-                    if (mode == 'function') {
-                        params = match[4].trim();
-                    }
+                    const params = (mode === 'function' && match[4]) ? match[4].trim() : '';
+                    logMsg = "Uri found " + uri;
+                    logToFile(logMsg);
                     return {
                         uri,
                         line: i,
                         startChar,
                         endChar: startChar + name.length,
-                        params: params,
-                        name: name
+                        params,
+                        name
                     };
                 }
             }
