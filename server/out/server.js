@@ -22,10 +22,12 @@ const documents = new node_1.TextDocuments(vscode_languageserver_textdocument_1.
 let workspaceRoot = null;
 const fileVariablesMap = new Map();
 const logFile = path.join(__dirname, 'krl-server.log');
+let logMsg = "";
 // Variables and struct maps (updated dynamically)
 let variableStructTypes = {};
 let structDefinitions = {};
 let functionsDeclared = [];
+let mergedVariables = [];
 // =======================
 // Initialization Handlers
 // =======================
@@ -59,10 +61,10 @@ connection.onInitialized(() => __awaiter(void 0, void 0, void 0, function* () {
         collector.extractFromText(content);
         fileVariablesMap.set(uri, collector.getVariables());
         functionsDeclared = yield getAllFunctionDeclarations();
-        logToFile(`Extracted functions from : ${JSON.stringify(functionsDeclared, null, 2)}`);
+        //logToFile(`Extracted functions from : ${JSON.stringify(functionsDeclared, null, 2)}`);
     }
     // Step 2: Merge and log variables for all files
-    const mergedVariables = mergeAllVariables(fileVariablesMap);
+    mergedVariables = mergeAllVariables(fileVariablesMap);
     //logToFile(`Merged variables: ${JSON.stringify(mergedVariables, null, 2)}`);
     // Step 3: Optionally validate each file with merged variables (commented out)
     for (const filePath of files) {
@@ -87,7 +89,8 @@ documents.onDidChangeContent((change) => __awaiter(void 0, void 0, void 0, funct
     const collector = new DeclaredVariableCollector();
     collector.extractFromText(document.getText());
     fileVariablesMap.set(document.uri, collector.getVariables());
-    const mergedVariables = mergeAllVariables(fileVariablesMap);
+    mergedVariables = mergeAllVariables(fileVariablesMap);
+    //logToFile(`Extracted variables: ${JSON.stringify(mergedVariables, null, 2)}`);
     // const diagnostics = await validateVariablesUsage(document, mergedVariables);
     // connection.sendDiagnostics({ uri: document.uri, diagnostics });
 }));
@@ -118,10 +121,14 @@ function getAllDatFiles(dir) {
  * Merge all variables from multiple files into a single map.
  */
 function mergeAllVariables(map) {
-    const result = {};
+    const result = [];
+    const seen = new Set();
     for (const vars of map.values()) {
         for (const v of vars) {
-            result[v.name] = v.type || '';
+            if (!seen.has(v.name)) {
+                seen.add(v.name);
+                result.push({ name: v.name, type: v.type || '' });
+            }
         }
     }
     return result;
@@ -142,18 +149,48 @@ connection.onDefinition((params) => __awaiter(void 0, void 0, void 0, function* 
     const lines = doc.getText().split(/\r?\n/);
     const lineText = lines[params.position.line];
     // Ignore certain declarations lines
-    if (/^\s*(GLOBAL\s+)?(DEF|DEFFCT|DECL|SIGNAL|STRUC)\b/i.test(lineText))
+    if (/^\s*(GLOBAL\s+)?(DEF|DEFFCT|DECL INT|DECL REAL|DECL BOOL|DECL FRAME)\b/i.test(lineText))
         return;
     const functionName = getWordAtPosition(lineText, params.position.character);
     if (!functionName)
         return;
-    const result = yield isFunctionDeclared(functionName);
-    if (!result)
-        return;
-    return node_1.Location.create(result.uri, {
-        start: node_1.Position.create(result.line, result.startChar),
-        end: node_1.Position.create(result.line, result.endChar)
-    });
+    //Search for name as function first
+    const resultFct = yield isFunctionDeclared(functionName, "function");
+    if (resultFct != undefined) {
+        return node_1.Location.create(resultFct.uri, {
+            start: node_1.Position.create(resultFct.line, resultFct.startChar),
+            end: node_1.Position.create(resultFct.line, resultFct.endChar)
+        });
+    }
+    //Search for name as custom user variable type
+    for (const key in structDefinitions) {
+        if (key === functionName) {
+            logMsg = "Struc read !";
+            logToFile(logMsg);
+            const resultStruc = yield isFunctionDeclared(functionName, "struc");
+            if (resultStruc != undefined) {
+                return node_1.Location.create(resultStruc.uri, {
+                    start: node_1.Position.create(resultStruc.line, resultStruc.startChar),
+                    end: node_1.Position.create(resultStruc.line, resultStruc.endChar)
+                });
+            }
+        }
+    }
+    //Search for name as variable    
+    for (const element of mergedVariables) {
+        if (element.name === functionName) {
+            logMsg = "Variable read !";
+            logToFile(logMsg);
+            const resultVar = yield isFunctionDeclared(functionName, "variable");
+            if (resultVar !== undefined) {
+                return node_1.Location.create(resultVar.uri, {
+                    start: node_1.Position.create(resultVar.line, resultVar.startChar),
+                    end: node_1.Position.create(resultVar.line, resultVar.endChar)
+                });
+            }
+        }
+    }
+    return;
 }));
 // ===================
 // Hover Request Handler
@@ -169,7 +206,7 @@ connection.onHover((params) => __awaiter(void 0, void 0, void 0, function* () {
     const functionName = getWordAtPosition(lineText, params.position.character);
     if (!functionName)
         return;
-    const result = yield isFunctionDeclared(functionName);
+    const result = yield isFunctionDeclared(functionName, "function");
     if (!result)
         return;
     return {
@@ -311,12 +348,24 @@ function findSrcFiles(dir) {
 /**
  * Check if a function with given name is declared in any source file.
  */
-function isFunctionDeclared(name) {
+function isFunctionDeclared(name, mode) {
     return __awaiter(this, void 0, void 0, function* () {
         if (!workspaceRoot)
             return undefined;
         const files = yield findSrcFiles(workspaceRoot);
-        const defRegex = new RegExp(`\\b(GLOBAL\\s+)?(DEF|DEFFCT)\\s+(\\w+\\s+)?${name}\\s*\\(([^)]*)\\)`, 'i');
+        let defRegex = new RegExp(` `);
+        if (mode == "struc") {
+            defRegex = new RegExp(`\\b(?:GLOBAL\\s+)?(?:STRUC)\\s+${name}\\b`, 'i');
+        }
+        else if (mode == "variable") {
+            defRegex = new RegExp(`\\b(?:GLOBAL\\s+)?(?:DECL|SIGNAL)\\b[^\\n]*\\b${name}\\b`, 'i');
+        }
+        else if (mode == "function") {
+            defRegex = new RegExp(`\\b(GLOBAL\\s+)?(DEF|DEFFCT)\\s+(\\w+\\s+)?${name}\\s*\\(([^)]*)\\)`, 'i');
+        }
+        else {
+            return undefined;
+        }
         for (const filePath of files) {
             const content = fs.readFileSync(filePath, 'utf8');
             const fileLines = content.split(/\r?\n/);
@@ -326,12 +375,19 @@ function isFunctionDeclared(name) {
                 if (match) {
                     const uri = vscode_uri_1.URI.file(filePath).toString();
                     const startChar = defLine.indexOf(name);
+                    let params = "";
+                    let cal = startChar + name.length;
+                    logMsg = "Match : " + uri + ' - ' + i + ' - ' + startChar + ' - ' + cal + ' - ' + params + ' - ' + name;
+                    logToFile(logMsg);
+                    if (mode == 'function') {
+                        params = match[4].trim();
+                    }
                     return {
                         uri,
                         line: i,
                         startChar,
                         endChar: startChar + name.length,
-                        params: match[4].trim(),
+                        params: params,
                         name: name
                     };
                 }
@@ -446,7 +502,7 @@ function validateVariablesUsage(document, variableTypes) {
                 if (match.index !== undefined && match.index > 0 && (line[match.index - 1] === '$' || line[match.index - 1] === '#'))
                     continue;
                 // Skip known function names
-                if (yield isFunctionDeclared(varName))
+                if (yield isFunctionDeclared(varName, "function"))
                     continue;
                 // Skip keywords and known types
                 if (keywords.has(varName.toUpperCase()))
