@@ -149,6 +149,9 @@ connection.onDefinition((params) => __awaiter(void 0, void 0, void 0, function* 
         return;
     const lines = doc.getText().split(/\r?\n/);
     const lineText = lines[params.position.line];
+    let enclosures = findEnclosuresLines(params.position.line, lines);
+    logMsg = "Enclosures : " + enclosures.bottomLine + ' - ' + enclosures.upperLine;
+    logToFile(logMsg);
     // Ignore certain declarations lines
     if (/^\s*(GLOBAL\s+)?(DEF|DEFFCT|DECL INT|DECL REAL|DECL BOOL|DECL FRAME)\b/i.test(lineText))
         return;
@@ -307,6 +310,35 @@ function getAllFunctionDeclarations() {
 // Utility Functions
 // =========================
 /**
+ * Find DEF, DEFCT, DETDAT enclosures lines
+ */
+function findEnclosuresLines(lineNumber, lines) {
+    let row = lineNumber;
+    let result = {
+        upperLine: 0,
+        bottomLine: lines.length - 1
+    };
+    // Search upwards
+    while (row >= 0) {
+        if (lines[row].includes("DEFFCT") || lines[row].includes("DEF") || lines[row].includes("DEFDAT")) {
+            result.upperLine = row;
+            break;
+        }
+        row--;
+    }
+    // Reset row to start from original position
+    row = lineNumber;
+    // Search downwards
+    while (row < lines.length) {
+        if (lines[row].includes("ENDFCT") || lines[row].includes("END") || lines[row].includes("ENDDAT")) {
+            result.bottomLine = row;
+            break;
+        }
+        row++;
+    }
+    return result;
+}
+/**
  * Extract the word at a given character position in a line.
  */
 function getWordAtPosition(lineText, character) {
@@ -382,9 +414,6 @@ function isFunctionDeclared(name, mode) {
                     const uri = vscode_uri_1.URI.file(filePath).toString();
                     const startChar = defLine.indexOf(name);
                     let params = "";
-                    let cal = startChar + name.length;
-                    logMsg = "Match : " + uri + ' - ' + i + ' - ' + startChar + ' - ' + cal + ' - ' + params + ' - ' + name;
-                    logToFile(logMsg);
                     if (mode == 'function') {
                         params = match[4].trim();
                     }

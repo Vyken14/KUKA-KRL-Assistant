@@ -59,9 +59,15 @@ interface FunctionDeclaration {
   name: string;
 }
 
+
 interface WordInfo {
   word: string;
   isSubvariable: boolean;
+}
+
+interface EnclosuresLines {
+  upperLine: number;
+  bottomLine: number;
 }
 
 // Variables and struct maps (updated dynamically)
@@ -217,6 +223,8 @@ connection.onDefinition(
     const lines = doc.getText().split(/\r?\n/);
     const lineText = lines[params.position.line];
 
+    let enclosures=findEnclosuresLines(params.position.line,lines)
+
     // Ignore certain declarations lines
     if (/^\s*(GLOBAL\s+)?(DEF|DEFFCT|DECL INT|DECL REAL|DECL BOOL|DECL FRAME)\b/i.test(lineText)) return;
 
@@ -237,6 +245,7 @@ connection.onDefinition(
         end: Position.create(resultFct.line, resultFct.endChar)
       });
     }
+    
     
     //Search for name as custom user variable type
     for (const key in structDefinitions) {
@@ -360,16 +369,6 @@ connection.onCompletion(async (params: CompletionParams): Promise<CompletionItem
 });
 
 
-
-interface FunctionDeclaration {
-  uri: string;
-  line: number;
-  startChar: number;
-  endChar: number;
-  params: string;
-  name: string;
-}
-
 async function getAllFunctionDeclarations(): Promise<FunctionDeclaration[]> {
   if (!workspaceRoot) return [];
 
@@ -413,6 +412,45 @@ async function getAllFunctionDeclarations(): Promise<FunctionDeclaration[]> {
 // =========================
 // Utility Functions
 // =========================
+
+
+/**
+ * Find DEF, DEFCT, DETDAT enclosures lines
+ */
+
+function findEnclosuresLines(lineNumber: number, lines: string[]): EnclosuresLines {
+  let row = lineNumber;
+  let result: EnclosuresLines = {
+    upperLine: 0,
+    bottomLine: lines.length - 1
+  };
+
+  // Search upwards
+  while (row >= 0) {
+    if (lines[row].includes("DEFFCT") || lines[row].includes("DEF") || lines[row].includes("DEFDAT")) {
+      result.upperLine = row+1;
+      break;
+    }
+    row--;
+  }
+
+  // Reset row to start from original position
+  row = lineNumber;
+
+  // Search downwards
+  while (row < lines.length) {
+    if (lines[row].includes("ENDFCT") || lines[row].includes("END") || lines[row].includes("ENDDAT")) {
+      result.bottomLine = row+1;
+      break;
+    }
+    row++;
+  }
+
+  return result;
+}
+
+
+
 
 /**
  * Extract the word at a given character position in a line.
