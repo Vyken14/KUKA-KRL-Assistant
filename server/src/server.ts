@@ -56,6 +56,12 @@ interface FunctionDeclaration {
   startChar: number;
   endChar: number;
   params: string;
+  name: string;
+}
+
+interface WordInfo {
+  word: string;
+  isSubvariable: boolean;
 }
 
 // Variables and struct maps (updated dynamically)
@@ -214,8 +220,14 @@ connection.onDefinition(
     // Ignore certain declarations lines
     if (/^\s*(GLOBAL\s+)?(DEF|DEFFCT|DECL INT|DECL REAL|DECL BOOL|DECL FRAME)\b/i.test(lineText)) return;
 
-    const functionName = getWordAtPosition(lineText, params.position.character);
+    //Avoid looking for subvariables inside struc    
+    if (getWordAtPosition(lineText, params.position.character)?.isSubvariable) {
+      return;
+    }
+
+    const functionName = getWordAtPosition(lineText, params.position.character)?.word;
     if (!functionName) return;  
+    
 
     //Search for name as function first
     const resultFct = await isFunctionDeclared(functionName,"function");
@@ -270,7 +282,7 @@ connection.onHover(async (params) => {
 
   if (/^\s*(GLOBAL\s+)?(DEF|DEFFCT|DECL|SIGNAL|STRUC)\b/i.test(lineText)) return;
 
-  const functionName = getWordAtPosition(lineText, params.position.character);
+  const functionName = getWordAtPosition(lineText, params.position.character)?.word;
   if (!functionName) return;
 
   const result = await isFunctionDeclared(functionName,"function");
@@ -405,7 +417,8 @@ async function getAllFunctionDeclarations(): Promise<FunctionDeclaration[]> {
 /**
  * Extract the word at a given character position in a line.
  */
-function getWordAtPosition(lineText: string, character: number): string | undefined {
+
+function getWordAtPosition(lineText: string, character: number): WordInfo | undefined {
   const wordMatch = lineText.match(/\b(\w+)\b/g);
   if (!wordMatch) return;
 
@@ -414,7 +427,11 @@ function getWordAtPosition(lineText: string, character: number): string | undefi
     const start = lineText.indexOf(w, charCount);
     const end = start + w.length;
     if (character >= start && character <= end) {
-      return w;
+      const isSubvariable = start > 0 && lineText[start - 1] === '.';
+      return {
+        word: w,
+        isSubvariable
+      };
     }
     charCount = end;
   }
@@ -476,11 +493,6 @@ async function isFunctionDeclared(name: string, mode: string): Promise<FunctionD
         const startChar = defLine.indexOf(name);
         
         let params="";
-        let cal=startChar + name.length;
-
-        logMsg="Match : "+uri+' - '+i+' - '+startChar+' - '+cal+' - '+params+' - '+name;
-        logToFile(logMsg);
-
         if (mode=='function') {
           params=match[4].trim();
         }

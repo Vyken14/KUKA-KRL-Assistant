@@ -143,6 +143,7 @@ function logToFile(message) {
 // Definition Request Handler
 // =====================
 connection.onDefinition((params) => __awaiter(void 0, void 0, void 0, function* () {
+    var _a, _b;
     const doc = documents.get(params.textDocument.uri);
     if (!doc || !workspaceRoot)
         return;
@@ -151,7 +152,11 @@ connection.onDefinition((params) => __awaiter(void 0, void 0, void 0, function* 
     // Ignore certain declarations lines
     if (/^\s*(GLOBAL\s+)?(DEF|DEFFCT|DECL INT|DECL REAL|DECL BOOL|DECL FRAME)\b/i.test(lineText))
         return;
-    const functionName = getWordAtPosition(lineText, params.position.character);
+    //Avoid looking for subvariables inside struc    
+    if ((_a = getWordAtPosition(lineText, params.position.character)) === null || _a === void 0 ? void 0 : _a.isSubvariable) {
+        return;
+    }
+    const functionName = (_b = getWordAtPosition(lineText, params.position.character)) === null || _b === void 0 ? void 0 : _b.word;
     if (!functionName)
         return;
     //Search for name as function first
@@ -165,8 +170,6 @@ connection.onDefinition((params) => __awaiter(void 0, void 0, void 0, function* 
     //Search for name as custom user variable type
     for (const key in structDefinitions) {
         if (key === functionName) {
-            logMsg = "Struc read !";
-            logToFile(logMsg);
             const resultStruc = yield isFunctionDeclared(functionName, "struc");
             if (resultStruc != undefined) {
                 return node_1.Location.create(resultStruc.uri, {
@@ -179,8 +182,6 @@ connection.onDefinition((params) => __awaiter(void 0, void 0, void 0, function* 
     //Search for name as variable    
     for (const element of mergedVariables) {
         if (element.name === functionName) {
-            logMsg = "Variable read !";
-            logToFile(logMsg);
             const resultVar = yield isFunctionDeclared(functionName, "variable");
             if (resultVar !== undefined) {
                 return node_1.Location.create(resultVar.uri, {
@@ -196,6 +197,7 @@ connection.onDefinition((params) => __awaiter(void 0, void 0, void 0, function* 
 // Hover Request Handler
 // ===================
 connection.onHover((params) => __awaiter(void 0, void 0, void 0, function* () {
+    var _c;
     const doc = documents.get(params.textDocument.uri);
     if (!doc || !workspaceRoot)
         return;
@@ -203,7 +205,7 @@ connection.onHover((params) => __awaiter(void 0, void 0, void 0, function* () {
     const lineText = lines[params.position.line];
     if (/^\s*(GLOBAL\s+)?(DEF|DEFFCT|DECL|SIGNAL|STRUC)\b/i.test(lineText))
         return;
-    const functionName = getWordAtPosition(lineText, params.position.character);
+    const functionName = (_c = getWordAtPosition(lineText, params.position.character)) === null || _c === void 0 ? void 0 : _c.word;
     if (!functionName)
         return;
     const result = yield isFunctionDeclared(functionName, "function");
@@ -316,7 +318,11 @@ function getWordAtPosition(lineText, character) {
         const start = lineText.indexOf(w, charCount);
         const end = start + w.length;
         if (character >= start && character <= end) {
-            return w;
+            const isSubvariable = start > 0 && lineText[start - 1] === '.';
+            return {
+                word: w,
+                isSubvariable
+            };
         }
         charCount = end;
     }
