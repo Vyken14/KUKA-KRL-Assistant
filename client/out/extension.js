@@ -110,7 +110,7 @@ function validateTextDocument(document) {
                 }
             }
             // Check for standalone GLOBAL usage without DECL, DEF, DEFFCT, STRUC, SIGNAL
-            if (/\bGLOBAL\b/i.test(lineText) && !/\b(DECL|DEF|DEFFCT|STRUC|SIGNAL|ENUM|INT|REAL|FRAME|CHAR|BOOL|STRING)\b/i.test(lineText) && !/\b(INT|REAL|FRAME|CHAR|BOOL|STRING)\b/i.test(lineText)) {
+            if (/\bGLOBAL\b/i.test(lineText) && !/\b(DECL|DEF|DEFFCT|STRUC|SIGNAL|ENUM)\b/i.test(lineText) && !/\b(INT|REAL|FRAME|CHAR|BOOL|STRING|E6AXIS|E6POS|AXIS|LOAD)\b/i.test(lineText)) {
                 const globalIndex = fullText.indexOf('GLOBAL');
                 const range = new vscode.Range(i, globalIndex, i, globalIndex + 'GLOBAL'.length);
                 diagnostics.push(new vscode.Diagnostic(range, `'GLOBAL' must be used with DECL, STRUC, or SIGNAL on the same line, except if it's used with a predefined types.`, vscode.DiagnosticSeverity.Warning));

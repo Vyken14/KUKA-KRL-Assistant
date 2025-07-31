@@ -3,6 +3,12 @@
 All notable changes to this project will be documented in this file.
 ---
 
+## [1.4.4] - 2025-07-28
+### Fixed
+- Fix warning for DECL variable with GLOBAL if a predefined type is used
+
+------
+
 ## [1.4.3] - 2025-07-28
 ### Fixed
 - Autocompletion via Intellisense didn't show Keywords when written
