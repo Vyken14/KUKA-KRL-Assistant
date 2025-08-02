@@ -703,20 +703,25 @@ const splitVarsRespectingBrackets = (input) => {
 function validateKeywordPairsInDocument(document) {
     const keywordPairs = [
         { open: 'IF', close: 'ENDIF' },
-        { open: 'FOR', close: 'ENDFOR' },
-        { open: 'WHILE', close: 'ENDWHILE' },
+        { open: 'ELSE', close: 'ENDIF' },
         { open: 'IF', close: 'THEN' },
+        { open: 'FOR', close: 'ENDFOR' },
         { open: 'FOR', close: 'TO' },
+        { open: 'WHILE', close: 'ENDWHILE' },
+        { open: 'SWITCH', close: 'ENDSWITCH' },
+        { open: 'SWITCH', close: 'DEFAULT' },
     ];
     const diagnostics = [];
     const lines = document.getText().split(/\r?\n/);
     // For each keyword pair, run validation
     for (const pair of keywordPairs) {
         const stack = [];
-        const excludedPrefixes = ['WAIT', 'UNTIL', ']'];
+        const excludedPatterns = [
+            /\bWAIT\s+FOR\b/i,
+            /\bGLOBAL\s+SIGNAL\b/i
+        ];
         const regex = new RegExp(`\\b(${pair.open}|${pair.close})\\b`, 'gi');
         lines.forEach((lineText, lineIndex) => {
-            var _a;
             // Strip comments first
             const codeLine = lineText.split(';')[0];
             const matchesInCode = [];
@@ -730,10 +735,16 @@ function validateKeywordPairsInDocument(document) {
                 const insideQuotes = quotesBefore % 2 === 1;
                 if (insideQuotes)
                     continue;
-                // 2. Exclude if preceded by WAIT / UNTIL etc.
-                const wordsBefore = before.trim().split(/\s+/);
-                const previousWord = (_a = wordsBefore[wordsBefore.length - 1]) === null || _a === void 0 ? void 0 : _a.toUpperCase();
-                if (previousWord && excludedPrefixes.includes(previousWord))
+                // 2. Skip if line contains an excluded pattern before keyword
+                let skip = false;
+                for (const pattern of excludedPatterns) {
+                    const matched = pattern.exec(codeLine);
+                    if (matched && matched.index < match.index) {
+                        skip = true;
+                        break;
+                    }
+                }
+                if (skip)
                     continue;
                 matchesInCode.push({ keyword, index: character });
             }
