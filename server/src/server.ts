@@ -353,9 +353,6 @@ connection.onHover(async (params) => {
 // ==================
 connection.onCompletion(async (params: CompletionParams): Promise<CompletionItem[]> => {
   
-  logMsg=`On completion is called`
-  
-  logToFile(logMsg)
   const document = documents.get(params.textDocument.uri);
   if (!document) return [];
 
@@ -445,9 +442,9 @@ const currentWord = textBefore.trim().split(/\s+/).pop()?.toUpperCase() || '';
   const allItems = [...functionItems, ...structItems, ...uniqueKeywordItems];
 
 
-  logMsg=`Variable filtrées: ${JSON.stringify(allItems, null, 2)}`
+  // logMsg=`Variable filtrées: ${JSON.stringify(allItems, null, 2)}`
   
-  logToFile(logMsg)
+  // logToFile(logMsg)
 
   return allItems;
 });
@@ -917,63 +914,82 @@ function validateKeywordPairsInDocument(
   const keywordPairs: KeywordPair[] = [
       { open: 'IF', close: 'ENDIF' },
       { open: 'FOR', close: 'ENDFOR' },
-      { open: 'WHILE', close: 'ENDWHILE' }
+      { open: 'WHILE', close: 'ENDWHILE' },
+      { open: 'IF', close: 'THEN' },
+      { open: 'FOR', close: 'TO' },
     ];
 
   const diagnostics: Diagnostic[] = [];
   const lines = document.getText().split(/\r?\n/);
 
   // For each keyword pair, run validation
-  for (const pair of keywordPairs) {
-    const stack: { line: number; character: number }[] = [];
-    const openRegex = new RegExp(`\\b${pair.open}\\b`, 'i');
-    const closeRegex = new RegExp(`\\b${pair.close}\\b`, 'i');
+for (const pair of keywordPairs) {
+  const stack: { line: number; character: number }[] = [];
+  const excludedPrefixes = ['WAIT', 'UNTIL', ']']; 
+  const regex = new RegExp(`\\b(${pair.open}|${pair.close})\\b`, 'gi');
 
-    
-    lines.forEach((lineText, lineIndex) => {
-      // Search for all occurrences of the open/close keywords in the line
-      let match: RegExpExecArray | null;
-      const regex = new RegExp(`\\b(${pair.open}|${pair.close})\\b`, 'gi');
-      while ((match = regex.exec(lineText)) !== null) {
-        const keyword = match[1].toUpperCase();
-        const character = match.index;
+  lines.forEach((lineText, lineIndex) => {
+    // Strip comments first
+    const codeLine = lineText.split(';')[0];
 
-        if (keyword === pair.open.toUpperCase()) {
-          stack.push({ line: lineIndex, character });
-        } else if (keyword === pair.close.toUpperCase()) {
-          if (stack.length > 0) {
-            stack.pop(); // Found a valid match
-          } else {
-            // Unmatched closing keyword
-            diagnostics.push({
-              severity: DiagnosticSeverity.Error,
-              range: Range.create(
-                Position.create(lineIndex, character),
-                Position.create(lineIndex, character + pair.close.length)
-              ),
-              message: `Unmatched '${pair.close}' without preceding '${pair.open}'`,
-              source: 'keyword-checker'
-            });
-          }
+    const matchesInCode: { keyword: string; index: number }[] = [];
+    let match: RegExpExecArray | null;
+
+    while ((match = regex.exec(codeLine)) !== null) {
+      const keyword = match[1].toUpperCase();
+      const character = match.index;
+
+      // 1. Exclude if inside double quotes
+      const before = codeLine.slice(0, character);
+      const quotesBefore = (before.match(/"/g) || []).length;
+      const insideQuotes = quotesBefore % 2 === 1;
+      if (insideQuotes) continue;
+
+      // 2. Exclude if preceded by WAIT / UNTIL etc.
+      const wordsBefore = before.trim().split(/\s+/);
+      const previousWord = wordsBefore[wordsBefore.length - 1]?.toUpperCase();
+      if (previousWord && excludedPrefixes.includes(previousWord)) continue;
+
+      matchesInCode.push({ keyword, index: character });
+    }
+
+    // 3. Process matches
+    for (const { keyword, index: character } of matchesInCode) {
+      if (keyword === pair.open.toUpperCase()) {
+        stack.push({ line: lineIndex, character });
+      } else if (keyword === pair.close.toUpperCase()) {
+        if (stack.length > 0) {
+          stack.pop();
+        } else {
+          diagnostics.push({
+            severity: DiagnosticSeverity.Error,
+            range: Range.create(
+              Position.create(lineIndex, character),
+              Position.create(lineIndex, character + pair.close.length)
+            ),
+            message: `'${pair.close}' without preceding '${pair.open}'`,
+            source: 'keyword-checker'
+          });
         }
       }
-    });
-
-    // Any remaining items in stack are unmatched openings
-    for (const unmatched of stack) {
-      diagnostics.push({
-        severity: DiagnosticSeverity.Error,
-        range: Range.create(
-          Position.create(unmatched.line, unmatched.character),
-          Position.create(unmatched.line, unmatched.character + pair.open.length)
-        ),
-        message: `Unclosed '${pair.open}' without matching '${pair.close}'`,
-        source: 'keyword-checker'
-      });
     }
-  }
+  });
 
-  return diagnostics;
+  // 4. Check for leftovers in the stack (unclosed openers)
+  for (const unmatched of stack) {
+    diagnostics.push({
+      severity: DiagnosticSeverity.Error,
+      range: Range.create(
+        Position.create(unmatched.line, unmatched.character),
+        Position.create(unmatched.line, unmatched.character + pair.open.length)
+      ),
+      message: `'${pair.open}' without matching '${pair.close}'`,
+      source: 'keyword-checker'
+    });
+  }
+}
+
+return diagnostics;
 }
 
 // =====================
