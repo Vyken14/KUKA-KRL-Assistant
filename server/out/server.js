@@ -107,6 +107,8 @@ documents.onDidChangeContent((change) => __awaiter(void 0, void 0, void 0, funct
     //logToFile(`Extracted variables: ${JSON.stringify(mergedVariables, null, 2)}`);
     // const diagnostics = await validateVariablesUsage(document, mergedVariables);
     // connection.sendDiagnostics({ uri: document.uri, diagnostics });
+    const diagnostics = validateKeywordPairsInDocument(change.document);
+    connection.sendDiagnostics({ uri: change.document.uri, diagnostics });
 }));
 // ===================
 // File and Variables Utilities
@@ -700,6 +702,57 @@ const splitVarsRespectingBrackets = (input) => {
         result.push(current.trim());
     return result;
 };
+function validateKeywordPairsInDocument(document) {
+    const keywordPairs = [
+        { open: 'IF', close: 'ENDIF' },
+        { open: 'FOR', close: 'ENDFOR' },
+        { open: 'WHILE', close: 'ENDWHILE' }
+    ];
+    const diagnostics = [];
+    const lines = document.getText().split(/\r?\n/);
+    // For each keyword pair, run validation
+    for (const pair of keywordPairs) {
+        const stack = [];
+        const openRegex = new RegExp(`\\b${pair.open}\\b`, 'i');
+        const closeRegex = new RegExp(`\\b${pair.close}\\b`, 'i');
+        lines.forEach((lineText, lineIndex) => {
+            // Search for all occurrences of the open/close keywords in the line
+            let match;
+            const regex = new RegExp(`\\b(${pair.open}|${pair.close})\\b`, 'gi');
+            while ((match = regex.exec(lineText)) !== null) {
+                const keyword = match[1].toUpperCase();
+                const character = match.index;
+                if (keyword === pair.open.toUpperCase()) {
+                    stack.push({ line: lineIndex, character });
+                }
+                else if (keyword === pair.close.toUpperCase()) {
+                    if (stack.length > 0) {
+                        stack.pop(); // Found a valid match
+                    }
+                    else {
+                        // Unmatched closing keyword
+                        diagnostics.push({
+                            severity: node_1.DiagnosticSeverity.Error,
+                            range: node_1.Range.create(node_1.Position.create(lineIndex, character), node_1.Position.create(lineIndex, character + pair.close.length)),
+                            message: `Unmatched '${pair.close}' without preceding '${pair.open}'`,
+                            source: 'keyword-checker'
+                        });
+                    }
+                }
+            }
+        });
+        // Any remaining items in stack are unmatched openings
+        for (const unmatched of stack) {
+            diagnostics.push({
+                severity: node_1.DiagnosticSeverity.Error,
+                range: node_1.Range.create(node_1.Position.create(unmatched.line, unmatched.character), node_1.Position.create(unmatched.line, unmatched.character + pair.open.length)),
+                message: `Unclosed '${pair.open}' without matching '${pair.close}'`,
+                source: 'keyword-checker'
+            });
+        }
+    }
+    return diagnostics;
+}
 // =====================
 // Start LSP Server
 // =====================
