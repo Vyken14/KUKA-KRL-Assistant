@@ -40,10 +40,32 @@
         "scopeName": "source.krl",
         "path": "./client/syntaxes/krl.tmLanguage.json"
       }
+    ],
+    "configuration": {
+      "type": "object",
+      "title": "KUKA KRL Assistant Settings",
+      "properties": {
+        "kuka-krl-assistant.defdatValidation": {
+          "type": "boolean",
+          "default": true,
+          "description": "Enable or disable DEFDAT validation"
+        }
+      }
+    },
+    "commands": [
+      {
+        "command": "kuka-krl-assistant.toggleDefdatValidation",
+        "title": "KRL assistant : Toggle DEFDAT Validation"
+      },
+      {
+        "command": "kuka-krl-assistant.showStatus",
+        "title": "KRL assistant : Show Status"
+      }
     ]
   },
   "scripts": {
-    "compile": "tsc -b client server"
+    "merge-commands": "node mergeCommands.js",
+    "compile": "tsc -b client server && npm run merge-commands"
   },
   "devDependencies": {
     "typescript": "^4.9.5"

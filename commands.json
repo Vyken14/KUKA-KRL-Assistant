@@ -1,0 +1,23 @@
+{
+  "configuration": {
+    "type": "object",
+    "title": "KUKA KRL Assistant Settings",
+    "properties": {
+      "kuka-krl-assistant.defdatValidation": {
+        "type": "boolean",
+        "default": true,
+        "description": "Enable or disable DEFDAT validation"
+      }
+    }
+  },
+  "commands": [
+    {
+      "command": "kuka-krl-assistant.toggleDefdatValidation",
+      "title": "KRL assistant : Toggle DEFDAT Validation"
+    },
+    {
+      "command": "kuka-krl-assistant.showStatus",
+      "title": "KRL assistant : Show Status"
+    }
+  ]
+}
