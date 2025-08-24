@@ -16,6 +16,10 @@ let client: LanguageClient;
  * Extension activation function
  */
 export function activate(context: vscode.ExtensionContext) {
+  
+  
+  commandsHandler(context, client);
+
   // Path to the language server module
   const serverModule = context.asAbsolutePath(path.join('server', 'out', 'server.js'));
 
@@ -79,10 +83,14 @@ export function activate(context: vscode.ExtensionContext) {
       validateAllKrlFiles();
     }, 1000);
   });
+  
+
 
   // Dispose the diagnostic collection on extension deactivate
   context.subscriptions.push(diagnosticCollection);
 }
+
+
 
 /**
  * Validate a single KRL text document
@@ -194,4 +202,46 @@ export function deactivate(): Thenable<void> | undefined {
   diagnosticCollection.dispose();
   if (!client) return undefined;
   return client.stop();
+}
+
+
+function commandsHandler(context: vscode.ExtensionContext, client: LanguageClient) {
+  // === Toggle DEFDAT Validation ===
+  const toggleCmd = vscode.commands.registerCommand(
+    "kuka-krl-assistant.toggleDefdatValidation",
+    () => {
+      const config = vscode.workspace.getConfiguration("kuka-krl-assistant");
+      const current = config.get<boolean>("defdatValidation", true);
+      config.update("defdatValidation", !current, vscode.ConfigurationTarget.Global);
+      vscode.window.showInformationMessage(
+        `DEFDAT Validation is now ${!current ? "enabled" : "disabled"}`
+      );
+    }
+  );
+  context.subscriptions.push(toggleCmd);
+
+  // === Track config changes and notify server ===
+  vscode.workspace.onDidChangeConfiguration(e => {
+    if (e.affectsConfiguration("kuka-krl-assistant.defdatValidation")) {
+      const config = vscode.workspace.getConfiguration("kuka-krl-assistant");
+      const enabled = config.get<boolean>("defdatValidation", true);
+      client.sendNotification("custom/defdatValidation", { enabled });
+    }
+  });
+
+  // === Status Summary Command ===
+  const outputChannel = vscode.window.createOutputChannel("KUKA KRL Assistant");
+  const disposable = vscode.commands.registerCommand(
+    "kuka-krl-assistant.showStatus",
+    () => {
+      const config = vscode.workspace.getConfiguration("kuka-krl-assistant");
+
+      outputChannel.clear();
+      outputChannel.appendLine("=== KUKA KRL Assistant Settings Summary ===");
+      outputChannel.appendLine(`DEFDAT validation: ${config.get("defdatValidation", false)}`);
+
+      outputChannel.show(true);
+    }
+  );
+  context.subscriptions.push(disposable);
 }

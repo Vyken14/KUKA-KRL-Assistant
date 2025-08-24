@@ -23,6 +23,10 @@ let workspaceRoot = null;
 const fileVariablesMap = new Map();
 const logFile = path.join(__dirname, 'krl-server.log');
 let logMsg = "";
+let defdatValidationEnabled = false;
+connection.onNotification('custom/defdatValidation', (params) => {
+    defdatValidationEnabled = params.enabled;
+});
 // Variables and struct maps (updated dynamically)
 let variableStructTypes = {};
 let structDefinitions = {};
@@ -491,64 +495,66 @@ function validateAllDatFiles(connection) {
 }
 exports.validateAllDatFiles = validateAllDatFiles;
 function validateDatFile(document, connection) {
-    const diagnostics = [];
-    const lines = document.getText().split(/\r?\n/);
-    let insideDefdat = false;
-    let insidePublicDefdat = false;
-    for (let i = 0; i < lines.length; i++) {
-        const line = lines[i].trim();
-        // Detect start of DEFDAT
-        const defdatMatch = line.match(/^DEFDAT\s+(\w+)(?:\s+PUBLIC)?/i);
-        if (defdatMatch) {
-            insideDefdat = true;
-            insidePublicDefdat = /PUBLIC/i.test(line);
-            continue;
-        }
-        // Detect end of DEFDAT
-        if (/^ENDDAT/i.test(line)) {
-            insideDefdat = false;
-            insidePublicDefdat = false;
-            continue;
-        }
-        if (insideDefdat) {
-            const declMatch = line.match(/^(DECL|SIGNAL|STRUC)\b/i);
-            if (!declMatch)
+    if (defdatValidationEnabled) {
+        const diagnostics = [];
+        const lines = document.getText().split(/\r?\n/);
+        let insideDefdat = false;
+        let insidePublicDefdat = false;
+        for (let i = 0; i < lines.length; i++) {
+            const line = lines[i].trim();
+            // Detect start of DEFDAT
+            const defdatMatch = line.match(/^DEFDAT\s+(\w+)(?:\s+PUBLIC)?/i);
+            if (defdatMatch) {
+                insideDefdat = true;
+                insidePublicDefdat = /PUBLIC/i.test(line);
                 continue;
-            if (insidePublicDefdat) {
-                if (!/\bGLOBAL\b/i.test(line)) {
-                    const newDiagnostic = {
-                        severity: node_1.DiagnosticSeverity.Warning,
-                        range: {
-                            start: { line: i, character: 0 },
-                            end: { line: i, character: line.length }
-                        },
-                        message: `Declaration is not GLOBAL but DEFDAT is PUBLIC.`,
-                        source: 'Kuka-krl-assistant'
-                    };
-                    if (!isDuplicateDiagnostic(newDiagnostic, diagnostics)) {
-                        diagnostics.push(newDiagnostic);
+            }
+            // Detect end of DEFDAT
+            if (/^ENDDAT/i.test(line)) {
+                insideDefdat = false;
+                insidePublicDefdat = false;
+                continue;
+            }
+            if (insideDefdat) {
+                const declMatch = line.match(/^(DECL|SIGNAL|STRUC)\b/i);
+                if (!declMatch)
+                    continue;
+                if (insidePublicDefdat) {
+                    if (!/\bGLOBAL\b/i.test(line)) {
+                        const newDiagnostic = {
+                            severity: node_1.DiagnosticSeverity.Warning,
+                            range: {
+                                start: { line: i, character: 0 },
+                                end: { line: i, character: line.length }
+                            },
+                            message: `Declaration is not GLOBAL but DEFDAT is PUBLIC.`,
+                            source: 'Kuka-krl-assistant'
+                        };
+                        if (!isDuplicateDiagnostic(newDiagnostic, diagnostics)) {
+                            diagnostics.push(newDiagnostic);
+                        }
                     }
                 }
-            }
-            else {
-                if (/GLOBAL/i.test(line)) {
-                    const newDiagnostic = {
-                        severity: node_1.DiagnosticSeverity.Error,
-                        range: {
-                            start: { line: i, character: 0 },
-                            end: { line: i, character: line.length }
-                        },
-                        message: `Declaration  is GLOBAL but DEFDAT is not PUBLIC.`,
-                        source: 'Kuka-krl-assistant'
-                    };
-                    if (!isDuplicateDiagnostic(newDiagnostic, diagnostics)) {
-                        diagnostics.push(newDiagnostic);
+                else {
+                    if (/GLOBAL/i.test(line)) {
+                        const newDiagnostic = {
+                            severity: node_1.DiagnosticSeverity.Error,
+                            range: {
+                                start: { line: i, character: 0 },
+                                end: { line: i, character: line.length }
+                            },
+                            message: `Declaration  is GLOBAL but DEFDAT is not PUBLIC.`,
+                            source: 'Kuka-krl-assistant'
+                        };
+                        if (!isDuplicateDiagnostic(newDiagnostic, diagnostics)) {
+                            diagnostics.push(newDiagnostic);
+                        }
                     }
                 }
             }
         }
+        connection.sendDiagnostics({ uri: document.uri, diagnostics });
     }
-    connection.sendDiagnostics({ uri: document.uri, diagnostics });
 }
 /**
  * Check if a diagnostic is duplicate in the list.

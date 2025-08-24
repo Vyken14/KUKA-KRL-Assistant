@@ -36,6 +36,13 @@ const fileVariablesMap: Map<string, VariableInfo[]> = new Map();
 const logFile = path.join(__dirname, 'krl-server.log');
 let logMsg="";
 
+let defdatValidationEnabled = false;
+
+connection.onNotification('custom/defdatValidation', (params: { enabled: boolean }) => {
+  defdatValidationEnabled = params.enabled;
+});
+
+
 // Types
 interface VariableInfo {
   name: string;
@@ -649,6 +656,10 @@ export function validateAllDatFiles(connection: Connection) {
 }
 
 function validateDatFile(document: TextDocument, connection: Connection) {
+
+  if (defdatValidationEnabled) {
+
+
   const diagnostics: Diagnostic[] = [];
   const lines = document.getText().split(/\r?\n/);
 
@@ -715,6 +726,7 @@ function validateDatFile(document: TextDocument, connection: Connection) {
     }
   }
   connection.sendDiagnostics({ uri: document.uri, diagnostics });
+}
 }
 
 

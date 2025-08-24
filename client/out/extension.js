@@ -21,6 +21,7 @@ let client;
  * Extension activation function
  */
 function activate(context) {
+    commandsHandler(context, client);
     // Path to the language server module
     const serverModule = context.asAbsolutePath(path.join('server', 'out', 'server.js'));
     // Server options for run and debug modes
@@ -170,3 +171,33 @@ function deactivate() {
     return client.stop();
 }
 exports.deactivate = deactivate;
+function commandsHandler(context, client) {
+    // === Toggle DEFDAT Validation ===
+    const toggleCmd = vscode.commands.registerCommand("kuka-krl-assistant.toggleDefdatValidation", () => {
+        const config = vscode.workspace.getConfiguration("kuka-krl-assistant");
+        const current = config.get("defdatValidation", true);
+        config.update("defdatValidation", !current, vscode.ConfigurationTarget.Global);
+        vscode.window.showInformationMessage(`DEFDAT Validation is now ${!current ? "enabled" : "disabled"}`);
+    });
+    context.subscriptions.push(toggleCmd);
+    // === Track config changes and notify server ===
+    vscode.workspace.onDidChangeConfiguration(e => {
+        if (e.affectsConfiguration("kuka-krl-assistant.defdatValidation")) {
+            const config = vscode.workspace.getConfiguration("kuka-krl-assistant");
+            const enabled = config.get("defdatValidation", true);
+            client.sendNotification("custom/defdatValidation", { enabled });
+        }
+    });
+    // === Status Summary Command ===
+    const outputChannel = vscode.window.createOutputChannel("KUKA KRL Assistant");
+    const disposable = vscode.commands.registerCommand("kuka-krl-assistant.showStatus", () => {
+        const config = vscode.workspace.getConfiguration("kuka-krl-assistant");
+        outputChannel.clear();
+        outputChannel.appendLine("=== KUKA KRL Assistant Settings Summary ===");
+        outputChannel.appendLine(`DEFDAT validation: ${config.get("defdatValidation", false)}`);
+        outputChannel.appendLine(`someOtherFlag: ${config.get("someOtherFlag", false)}`);
+        outputChannel.appendLine(`experimentalFeature: ${config.get("experimentalFeature", false)}`);
+        outputChannel.show(true);
+    });
+    context.subscriptions.push(disposable);
+}
