@@ -703,13 +703,13 @@ const splitVarsRespectingBrackets = (input) => {
 function validateKeywordPairsInDocument(document) {
     const keywordPairs = [
         { open: 'IF', close: 'ENDIF' },
-        { open: 'ELSE', close: 'ENDIF' },
         { open: 'IF', close: 'THEN' },
         { open: 'FOR', close: 'ENDFOR' },
         { open: 'FOR', close: 'TO' },
         { open: 'WHILE', close: 'ENDWHILE' },
         { open: 'SWITCH', close: 'ENDSWITCH' },
-        { open: 'SWITCH', close: 'DEFAULT' },
+        { open: 'SWITCH', close: 'CASE', requireMatchOnce: true },
+        { open: 'SWITCH', close: 'DEFAULT', requireMatchOnce: true }, // NEW
     ];
     const diagnostics = [];
     const lines = document.getText().split(/\r?\n/);
@@ -768,14 +768,30 @@ function validateKeywordPairsInDocument(document) {
                 }
             }
         });
-        // 4. Check for leftovers in the stack (unclosed openers)
-        for (const unmatched of stack) {
-            diagnostics.push({
-                severity: node_1.DiagnosticSeverity.Error,
-                range: node_1.Range.create(node_1.Position.create(unmatched.line, unmatched.character), node_1.Position.create(unmatched.line, unmatched.character + pair.open.length)),
-                message: `'${pair.open}' without matching '${pair.close}'`,
-                source: 'keyword-checker'
-            });
+        // 4. Handle unmatched keywords
+        if (pair.requireMatchOnce) {
+            // If match-once rule: ensure at least one open occurred before any close
+            const hasOpen = lines.some(line => new RegExp(`\\b${pair.open}\\b`, 'i').test(line));
+            const hasClose = lines.some(line => new RegExp(`\\b${pair.close}\\b`, 'i').test(line));
+            if (hasOpen && !hasClose) {
+                diagnostics.push({
+                    severity: node_1.DiagnosticSeverity.Error,
+                    range: node_1.Range.create(node_1.Position.create(0, 0), node_1.Position.create(0, 0)),
+                    message: `'${pair.open}' must contain at least one '${pair.close}'`,
+                    source: 'keyword-checker'
+                });
+            }
+        }
+        else {
+            // Standard stack handling
+            for (const unmatched of stack) {
+                diagnostics.push({
+                    severity: node_1.DiagnosticSeverity.Error,
+                    range: node_1.Range.create(node_1.Position.create(unmatched.line, unmatched.character), node_1.Position.create(unmatched.line, unmatched.character + pair.open.length)),
+                    message: `'${pair.open}' without matching '${pair.close}'`,
+                    source: 'keyword-checker'
+                });
+            }
         }
     }
     return diagnostics;

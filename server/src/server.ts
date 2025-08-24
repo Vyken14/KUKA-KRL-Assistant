@@ -905,22 +905,25 @@ const splitVarsRespectingBrackets = (input: string): string[] => {
 interface KeywordPair {
   open: string;
   close: string;
+  requireMatchOnce?: boolean; // NEW
 }
+
 
 function validateKeywordPairsInDocument(
   document: TextDocument
 ): Diagnostic[] {
 
   const keywordPairs: KeywordPair[] = [
-      { open: 'IF', close: 'ENDIF' },
-      { open: 'ELSE', close: 'ENDIF' },
-      { open: 'IF', close: 'THEN' },
-      { open: 'FOR', close: 'ENDFOR' },
-      { open: 'FOR', close: 'TO' },
-      { open: 'WHILE', close: 'ENDWHILE' },
-      { open: 'SWITCH', close: 'ENDSWITCH' },
-      { open: 'SWITCH', close: 'DEFAULT' },
-    ];
+  { open: 'IF', close: 'ENDIF' },
+  { open: 'IF', close: 'THEN' }, // No special logic needed
+  { open: 'FOR', close: 'ENDFOR' },
+  { open: 'FOR', close: 'TO' },
+  { open: 'WHILE', close: 'ENDWHILE' },
+  { open: 'SWITCH', close: 'ENDSWITCH' },
+  { open: 'SWITCH', close: 'CASE', requireMatchOnce: true },   
+  { open: 'SWITCH', close: 'DEFAULT', requireMatchOnce: true },
+];
+
 
   const diagnostics: Diagnostic[] = [];
   const lines = document.getText().split(/\r?\n/);
@@ -988,7 +991,21 @@ for (const pair of keywordPairs) {
     }
   });
 
-  // 4. Check for leftovers in the stack (unclosed openers)
+  // 4. Handle unmatched keywords
+if (pair.requireMatchOnce) {
+  // If match-once rule: ensure at least one open occurred before any close
+  const hasOpen = lines.some(line => new RegExp(`\\b${pair.open}\\b`, 'i').test(line));
+  const hasClose = lines.some(line => new RegExp(`\\b${pair.close}\\b`, 'i').test(line));
+  if (hasOpen && !hasClose) {
+    diagnostics.push({
+      severity: DiagnosticSeverity.Error,
+      range: Range.create(Position.create(0, 0), Position.create(0, 0)),
+      message: `'${pair.open}' must contain at least one '${pair.close}'`,
+      source: 'keyword-checker'
+    });
+  }
+} else {
+  // Standard stack handling
   for (const unmatched of stack) {
     diagnostics.push({
       severity: DiagnosticSeverity.Error,
@@ -1000,6 +1017,8 @@ for (const pair of keywordPairs) {
       source: 'keyword-checker'
     });
   }
+}
+
 }
 
 return diagnostics;
