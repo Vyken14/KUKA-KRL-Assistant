@@ -21,7 +21,6 @@ let client;
  * Extension activation function
  */
 function activate(context) {
-    commandsHandler(context, client);
     // Path to the language server module
     const serverModule = context.asAbsolutePath(path.join('server', 'out', 'server.js'));
     // Server options for run and debug modes
@@ -60,6 +59,7 @@ function activate(context) {
     }));
     // Start the language client
     client.start().then(() => {
+        commandsHandler(context, client);
         // After client starts, validate all already opened KRL documents
         vscode.workspace.textDocuments.forEach(doc => {
             if (doc.languageId === 'krl') {
@@ -172,6 +172,8 @@ function deactivate() {
 }
 exports.deactivate = deactivate;
 function commandsHandler(context, client) {
+    //at init only
+    sendSettingsToServer(client);
     // === Toggle DEFDAT Validation ===
     const toggleCmd = vscode.commands.registerCommand("kuka-krl-assistant.toggleDefdatValidation", () => {
         const config = vscode.workspace.getConfiguration("kuka-krl-assistant");
@@ -183,9 +185,7 @@ function commandsHandler(context, client) {
     // === Track config changes and notify server ===
     vscode.workspace.onDidChangeConfiguration(e => {
         if (e.affectsConfiguration("kuka-krl-assistant.defdatValidation")) {
-            const config = vscode.workspace.getConfiguration("kuka-krl-assistant");
-            const enabled = config.get("defdatValidation", true);
-            client.sendNotification("custom/defdatValidation", { enabled });
+            sendSettingsToServer(client);
         }
     });
     // === Status Summary Command ===
@@ -195,9 +195,16 @@ function commandsHandler(context, client) {
         outputChannel.clear();
         outputChannel.appendLine("=== KUKA KRL Assistant Settings Summary ===");
         outputChannel.appendLine(`DEFDAT validation: ${config.get("defdatValidation", false)}`);
-        outputChannel.appendLine(`someOtherFlag: ${config.get("someOtherFlag", false)}`);
-        outputChannel.appendLine(`experimentalFeature: ${config.get("experimentalFeature", false)}`);
         outputChannel.show(true);
     });
     context.subscriptions.push(disposable);
+}
+function sendSettingsToServer(client) {
+    let config = vscode.workspace.getConfiguration("kuka-krl-assistant");
+    let payload = {
+        defdatValidation: config.get("defdatValidation", true)
+        // someOtherFlag: settings.get<boolean>("someOtherFlag", false),
+        // experimentalFeature: settings.get<boolean>("experimentalFeature", false),
+    };
+    client.sendNotification("custom/settings", payload);
 }

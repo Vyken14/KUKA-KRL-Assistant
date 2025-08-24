@@ -17,8 +17,6 @@ let client: LanguageClient;
  */
 export function activate(context: vscode.ExtensionContext) {
   
-  
-  commandsHandler(context, client);
 
   // Path to the language server module
   const serverModule = context.asAbsolutePath(path.join('server', 'out', 'server.js'));
@@ -70,7 +68,10 @@ export function activate(context: vscode.ExtensionContext) {
   );
 
   // Start the language client
-  client.start().then(() => {
+  client.start().then(() => {    
+  
+  commandsHandler(context, client);
+  
     // After client starts, validate all already opened KRL documents
     vscode.workspace.textDocuments.forEach(doc => {
       if (doc.languageId === 'krl') {
@@ -206,6 +207,10 @@ export function deactivate(): Thenable<void> | undefined {
 
 
 function commandsHandler(context: vscode.ExtensionContext, client: LanguageClient) {
+  
+  //at init only
+  sendSettingsToServer(client);
+
   // === Toggle DEFDAT Validation ===
   const toggleCmd = vscode.commands.registerCommand(
     "kuka-krl-assistant.toggleDefdatValidation",
@@ -216,16 +221,14 @@ function commandsHandler(context: vscode.ExtensionContext, client: LanguageClien
       vscode.window.showInformationMessage(
         `DEFDAT Validation is now ${!current ? "enabled" : "disabled"}`
       );
-    }
+    } 
   );
   context.subscriptions.push(toggleCmd);
 
   // === Track config changes and notify server ===
   vscode.workspace.onDidChangeConfiguration(e => {
     if (e.affectsConfiguration("kuka-krl-assistant.defdatValidation")) {
-      const config = vscode.workspace.getConfiguration("kuka-krl-assistant");
-      const enabled = config.get<boolean>("defdatValidation", true);
-      client.sendNotification("custom/defdatValidation", { enabled });
+      sendSettingsToServer(client);
     }
   });
 
@@ -244,4 +247,12 @@ function commandsHandler(context: vscode.ExtensionContext, client: LanguageClien
     }
   );
   context.subscriptions.push(disposable);
+}
+
+function sendSettingsToServer(client: LanguageClient) {
+  let config = vscode.workspace.getConfiguration("kuka-krl-assistant");
+  let payload = {
+      defdatValidation: config.get<boolean>("defdatValidation", true)
+       };
+    client.sendNotification("custom/settings", payload);
 }
