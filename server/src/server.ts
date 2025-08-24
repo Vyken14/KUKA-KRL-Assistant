@@ -35,13 +35,10 @@ let workspaceRoot: string | null = null;
 const fileVariablesMap: Map<string, VariableInfo[]> = new Map();
 const logFile = path.join(__dirname, 'krl-server.log');
 let logMsg="";
+let allDiagnostics: Diagnostic[] = [];
 
+//Commands variables
 let defdatValidationEnabled = false;
-
-connection.onNotification('custom/defdatValidation', (params: { enabled: boolean }) => {
-  defdatValidationEnabled = params.enabled;
-});
-
 
 // Types
 interface VariableInfo {
@@ -168,7 +165,7 @@ connection.onInitialized(async () => {
 documents.onDidChangeContent(async change => {
   const { document } = change;
 
-  if (document.uri.endsWith('.dat')) {
+  if (document.uri.endsWith('.dat') && defdatValidationEnabled) {
     validateDatFile(document, connection);
   }
 
@@ -454,6 +451,37 @@ const currentWord = textBefore.trim().split(/\s+/).pop()?.toUpperCase() || '';
   return allItems;
 });
 
+//Commands handlers
+connection.onNotification('custom/settings', (params: {
+  defdatValidation?: boolean
+}) => {
+  //DEFDAT Validation
+  if (typeof params.defdatValidation === 'boolean') {
+    defdatValidationEnabled = params.defdatValidation;
+    if (defdatValidationEnabled) {
+      validateAllDatFiles(connection);
+    }
+    else {
+      logToFile(`Clearing DEFDAT diagnostics as validation is disabled`);
+      clearDefdatDiagnostics();
+    }
+  }
+
+});
+
+function clearDefdatDiagnostics() {
+  documents.all().forEach(document => {
+      const uris = Array.from(new Set(allDiagnostics.map(d => document.uri)));
+
+      // Send empty diagnostics for each URI
+      uris.forEach(uri => {
+        connection.sendDiagnostics({ uri, diagnostics: [] });
+  });
+    });
+}
+
+
+
 
 async function getAllFunctionDeclarations(): Promise<FunctionDeclaration[]> {
   if (!workspaceRoot) return [];
@@ -648,19 +676,17 @@ async function findSrcFiles(dir: string): Promise<string[]> {
  * Validate all .dat files in currently opened documents.
  */
 export function validateAllDatFiles(connection: Connection) {
-  documents.all().forEach(document => {
-    if (document.uri.endsWith('.dat')) {
-      validateDatFile(document, connection);
-    }
-  });
+  if (defdatValidationEnabled) {
+    documents.all().forEach(document => {
+      if (document.uri.endsWith('.dat')) {
+        validateDatFile(document, connection);
+      }
+    });
+  }
 }
 
 function validateDatFile(document: TextDocument, connection: Connection) {
 
-  if (defdatValidationEnabled) {
-
-
-  const diagnostics: Diagnostic[] = [];
   const lines = document.getText().split(/\r?\n/);
 
   let insideDefdat = false;
@@ -691,43 +717,45 @@ function validateDatFile(document: TextDocument, connection: Connection) {
       if (insidePublicDefdat) {
 
         if (!/\bGLOBAL\b/i.test(line)) {
-          const newDiagnostic: Diagnostic = {
+          const newDiagnostic: Diagnostic & { uri: string } = {
+            uri: document.uri,
             severity: DiagnosticSeverity.Warning,
             range: {
               start: { line: i, character: 0 },
               end: { line: i, character: line.length }
             },
             message: `Declaration is not GLOBAL but DEFDAT is PUBLIC.`,
-            source: 'Kuka-krl-assistant'
+            source: 'defdat-validation'
           };
 
-          if (!isDuplicateDiagnostic(newDiagnostic, diagnostics)) {
-            diagnostics.push(newDiagnostic);
+          if (!isDuplicateDiagnostic(newDiagnostic, allDiagnostics)) {
+            allDiagnostics.push(newDiagnostic);
           }
         }
         
       } else {
         if (/GLOBAL/i.test(line)) {
-          const newDiagnostic: Diagnostic = {
+          const newDiagnostic: Diagnostic & { uri: string } = {
+            uri: document.uri,
             severity: DiagnosticSeverity.Error,
             range: {
               start: { line: i, character: 0 },
               end: { line: i, character: line.length }
             },
             message: `Declaration  is GLOBAL but DEFDAT is not PUBLIC.`,
-            source: 'Kuka-krl-assistant'
+            source: 'defdat-validation'
           };
 
-          if (!isDuplicateDiagnostic(newDiagnostic, diagnostics)) {
-            diagnostics.push(newDiagnostic);
+          if (!isDuplicateDiagnostic(newDiagnostic, allDiagnostics)) {
+            allDiagnostics.push(newDiagnostic);
           }
         }
       }
     }
   }
-  connection.sendDiagnostics({ uri: document.uri, diagnostics });
+  connection.sendDiagnostics({ uri: document.uri, diagnostics: allDiagnostics });
 }
-}
+
 
 
 
@@ -750,7 +778,6 @@ function isDuplicateDiagnostic(newDiag: Diagnostic, existingDiagnostics: Diagnos
  * Returns array of Diagnostics for undeclared variables.
  */
 async function validateVariablesUsage(document: TextDocument, variableTypes: { [varName: string]: string }): Promise<Diagnostic[]> {
-  const diagnostics: Diagnostic[] = [];
   const text = document.getText();
   const lines = text.split(/\r?\n/);
 
@@ -801,14 +828,14 @@ async function validateVariablesUsage(document: TextDocument, variableTypes: { [
           source: 'Kuka-krl-assistant'
         };
 
-        if (!isDuplicateDiagnostic(newDiagnostic, diagnostics)) {
-          diagnostics.push(newDiagnostic);
+        if (!isDuplicateDiagnostic(newDiagnostic, allDiagnostics)) {
+          allDiagnostics.push(newDiagnostic);
         }
       }
     }
   }
 
-  return diagnostics;
+  return allDiagnostics;
 }
 
 // =====================
@@ -852,6 +879,7 @@ function extractStrucVariables(datContent: string): void {
     structDefinitions[structName] = filtered;
   }
 }
+
 
 // ========================
 // Class: DeclaredVariableCollector

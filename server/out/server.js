@@ -23,10 +23,9 @@ let workspaceRoot = null;
 const fileVariablesMap = new Map();
 const logFile = path.join(__dirname, 'krl-server.log');
 let logMsg = "";
+let allDiagnostics = [];
+//Commands variables
 let defdatValidationEnabled = false;
-connection.onNotification('custom/defdatValidation', (params) => {
-    defdatValidationEnabled = params.enabled;
-});
 // Variables and struct maps (updated dynamically)
 let variableStructTypes = {};
 let structDefinitions = {};
@@ -100,7 +99,7 @@ connection.onInitialized(() => __awaiter(void 0, void 0, void 0, function* () {
 // ==========================
 documents.onDidChangeContent((change) => __awaiter(void 0, void 0, void 0, function* () {
     const { document } = change;
-    if (document.uri.endsWith('.dat')) {
+    if (document.uri.endsWith('.dat') && defdatValidationEnabled) {
         validateDatFile(document, connection);
     }
     extractStrucVariables(document.getText());
@@ -329,6 +328,29 @@ connection.onCompletion((params) => __awaiter(void 0, void 0, void 0, function* 
     logToFile(logMsg);
     return allItems;
 }));
+//Commands handlers
+connection.onNotification('custom/settings', (params) => {
+    //DEFDAT Validation
+    if (typeof params.defdatValidation === 'boolean') {
+        defdatValidationEnabled = params.defdatValidation;
+        if (defdatValidationEnabled) {
+            validateAllDatFiles(connection);
+        }
+        else {
+            logToFile(`Clearing DEFDAT diagnostics as validation is disabled`);
+            clearDefdatDiagnostics();
+        }
+    }
+});
+function clearDefdatDiagnostics() {
+    documents.all().forEach(document => {
+        const uris = Array.from(new Set(allDiagnostics.map(d => document.uri)));
+        // Send empty diagnostics for each URI
+        uris.forEach(uri => {
+            connection.sendDiagnostics({ uri, diagnostics: [] });
+        });
+    });
+}
 function getAllFunctionDeclarations() {
     return __awaiter(this, void 0, void 0, function* () {
         if (!workspaceRoot)
@@ -487,74 +509,75 @@ function findSrcFiles(dir) {
  * Validate all .dat files in currently opened documents.
  */
 function validateAllDatFiles(connection) {
-    documents.all().forEach(document => {
-        if (document.uri.endsWith('.dat')) {
-            validateDatFile(document, connection);
-        }
-    });
+    if (defdatValidationEnabled) {
+        documents.all().forEach(document => {
+            if (document.uri.endsWith('.dat')) {
+                validateDatFile(document, connection);
+            }
+        });
+    }
 }
 exports.validateAllDatFiles = validateAllDatFiles;
 function validateDatFile(document, connection) {
-    if (defdatValidationEnabled) {
-        const diagnostics = [];
-        const lines = document.getText().split(/\r?\n/);
-        let insideDefdat = false;
-        let insidePublicDefdat = false;
-        for (let i = 0; i < lines.length; i++) {
-            const line = lines[i].trim();
-            // Detect start of DEFDAT
-            const defdatMatch = line.match(/^DEFDAT\s+(\w+)(?:\s+PUBLIC)?/i);
-            if (defdatMatch) {
-                insideDefdat = true;
-                insidePublicDefdat = /PUBLIC/i.test(line);
+    const lines = document.getText().split(/\r?\n/);
+    let insideDefdat = false;
+    let insidePublicDefdat = false;
+    for (let i = 0; i < lines.length; i++) {
+        const line = lines[i].trim();
+        // Detect start of DEFDAT
+        const defdatMatch = line.match(/^DEFDAT\s+(\w+)(?:\s+PUBLIC)?/i);
+        if (defdatMatch) {
+            insideDefdat = true;
+            insidePublicDefdat = /PUBLIC/i.test(line);
+            continue;
+        }
+        // Detect end of DEFDAT
+        if (/^ENDDAT/i.test(line)) {
+            insideDefdat = false;
+            insidePublicDefdat = false;
+            continue;
+        }
+        if (insideDefdat) {
+            const declMatch = line.match(/^(DECL|SIGNAL|STRUC)\b/i);
+            if (!declMatch)
                 continue;
-            }
-            // Detect end of DEFDAT
-            if (/^ENDDAT/i.test(line)) {
-                insideDefdat = false;
-                insidePublicDefdat = false;
-                continue;
-            }
-            if (insideDefdat) {
-                const declMatch = line.match(/^(DECL|SIGNAL|STRUC)\b/i);
-                if (!declMatch)
-                    continue;
-                if (insidePublicDefdat) {
-                    if (!/\bGLOBAL\b/i.test(line)) {
-                        const newDiagnostic = {
-                            severity: node_1.DiagnosticSeverity.Warning,
-                            range: {
-                                start: { line: i, character: 0 },
-                                end: { line: i, character: line.length }
-                            },
-                            message: `Declaration is not GLOBAL but DEFDAT is PUBLIC.`,
-                            source: 'Kuka-krl-assistant'
-                        };
-                        if (!isDuplicateDiagnostic(newDiagnostic, diagnostics)) {
-                            diagnostics.push(newDiagnostic);
-                        }
+            if (insidePublicDefdat) {
+                if (!/\bGLOBAL\b/i.test(line)) {
+                    const newDiagnostic = {
+                        uri: document.uri,
+                        severity: node_1.DiagnosticSeverity.Warning,
+                        range: {
+                            start: { line: i, character: 0 },
+                            end: { line: i, character: line.length }
+                        },
+                        message: `Declaration is not GLOBAL but DEFDAT is PUBLIC.`,
+                        source: 'defdat-validation'
+                    };
+                    if (!isDuplicateDiagnostic(newDiagnostic, allDiagnostics)) {
+                        allDiagnostics.push(newDiagnostic);
                     }
                 }
-                else {
-                    if (/GLOBAL/i.test(line)) {
-                        const newDiagnostic = {
-                            severity: node_1.DiagnosticSeverity.Error,
-                            range: {
-                                start: { line: i, character: 0 },
-                                end: { line: i, character: line.length }
-                            },
-                            message: `Declaration  is GLOBAL but DEFDAT is not PUBLIC.`,
-                            source: 'Kuka-krl-assistant'
-                        };
-                        if (!isDuplicateDiagnostic(newDiagnostic, diagnostics)) {
-                            diagnostics.push(newDiagnostic);
-                        }
+            }
+            else {
+                if (/GLOBAL/i.test(line)) {
+                    const newDiagnostic = {
+                        uri: document.uri,
+                        severity: node_1.DiagnosticSeverity.Error,
+                        range: {
+                            start: { line: i, character: 0 },
+                            end: { line: i, character: line.length }
+                        },
+                        message: `Declaration  is GLOBAL but DEFDAT is not PUBLIC.`,
+                        source: 'defdat-validation'
+                    };
+                    if (!isDuplicateDiagnostic(newDiagnostic, allDiagnostics)) {
+                        allDiagnostics.push(newDiagnostic);
                     }
                 }
             }
         }
-        connection.sendDiagnostics({ uri: document.uri, diagnostics });
     }
+    connection.sendDiagnostics({ uri: document.uri, diagnostics: allDiagnostics });
 }
 /**
  * Check if a diagnostic is duplicate in the list.
@@ -573,7 +596,6 @@ function isDuplicateDiagnostic(newDiag, existingDiagnostics) {
  */
 function validateVariablesUsage(document, variableTypes) {
     return __awaiter(this, void 0, void 0, function* () {
-        const diagnostics = [];
         const text = document.getText();
         const lines = text.split(/\r?\n/);
         const variableRegex = /\b([a-zA-Z_]\w*)\b/g;
@@ -616,13 +638,13 @@ function validateVariablesUsage(document, variableTypes) {
                         },
                         source: 'Kuka-krl-assistant'
                     };
-                    if (!isDuplicateDiagnostic(newDiagnostic, diagnostics)) {
-                        diagnostics.push(newDiagnostic);
+                    if (!isDuplicateDiagnostic(newDiagnostic, allDiagnostics)) {
+                        allDiagnostics.push(newDiagnostic);
                     }
                 }
             }
         }
-        return diagnostics;
+        return allDiagnostics;
     });
 }
 // =====================
