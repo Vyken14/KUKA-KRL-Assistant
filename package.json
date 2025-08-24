@@ -2,7 +2,7 @@
   "name": "kuka-krl-assistant",
   "displayName": "KUKA KRL Assistant",
   "description": "Language features for KUKA KRL",
-  "version": "1.4.4",
+  "version": "1.4.5",
   "publisher": "Alfred",
   "repository": {
     "type": "git",
