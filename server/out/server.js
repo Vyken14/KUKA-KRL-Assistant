@@ -490,39 +490,61 @@ function validateAllDatFiles(connection) {
     });
 }
 exports.validateAllDatFiles = validateAllDatFiles;
-/**
- * Validate global declarations in .dat files, ensuring globals appear inside PUBLIC DEFDAT blocks.
- */
 function validateDatFile(document, connection) {
     const diagnostics = [];
-    const text = document.getText();
-    const lines = text.split(/\r?\n/);
+    const lines = document.getText().split(/\r?\n/);
+    let insideDefdat = false;
     let insidePublicDefdat = false;
     for (let i = 0; i < lines.length; i++) {
         const line = lines[i].trim();
-        // Detect start of PUBLIC DEFDAT
-        const defdatMatch = line.match(/^DEFDAT\s+\w+\s+PUBLIC/i);
+        // Detect start of DEFDAT
+        const defdatMatch = line.match(/^DEFDAT\s+(\w+)(?:\s+PUBLIC)?/i);
         if (defdatMatch) {
-            insidePublicDefdat = true;
+            insideDefdat = true;
+            insidePublicDefdat = /PUBLIC/i.test(line);
             continue;
         }
-        // If new DEFDAT without PUBLIC, exit public block
-        if (/^DEFDAT\s+\w+/i.test(line) && !/PUBLIC/i.test(line)) {
+        // Detect end of DEFDAT
+        if (/^ENDDAT/i.test(line)) {
+            insideDefdat = false;
             insidePublicDefdat = false;
+            continue;
         }
-        // Look for global declarations outside PUBLIC DEFDAT
-        if (/^(DECL|SIGNAL|STRUC)/i.test(line) && !insidePublicDefdat) {
-            const newDiagnostic = {
-                severity: node_1.DiagnosticSeverity.Error,
-                range: {
-                    start: { line: i, character: 0 },
-                    end: { line: i, character: line.length }
-                },
-                message: `Global declaration "${line.split(/\s+/)[0]}" is not inside a PUBLIC DEFDAT.`,
-                source: 'krl-linter'
-            };
-            if (!isDuplicateDiagnostic(newDiagnostic, diagnostics)) {
-                diagnostics.push(newDiagnostic);
+        if (insideDefdat) {
+            const declMatch = line.match(/^(DECL|SIGNAL|STRUC)\b/i);
+            if (!declMatch)
+                continue;
+            if (insidePublicDefdat) {
+                if (!/\bGLOBAL\b/i.test(line)) {
+                    const newDiagnostic = {
+                        severity: node_1.DiagnosticSeverity.Warning,
+                        range: {
+                            start: { line: i, character: 0 },
+                            end: { line: i, character: line.length }
+                        },
+                        message: `Declaration is not GLOBAL but DEFDAT is PUBLIC.`,
+                        source: 'Kuka-krl-assistant'
+                    };
+                    if (!isDuplicateDiagnostic(newDiagnostic, diagnostics)) {
+                        diagnostics.push(newDiagnostic);
+                    }
+                }
+            }
+            else {
+                if (/GLOBAL/i.test(line)) {
+                    const newDiagnostic = {
+                        severity: node_1.DiagnosticSeverity.Error,
+                        range: {
+                            start: { line: i, character: 0 },
+                            end: { line: i, character: line.length }
+                        },
+                        message: `Declaration  is GLOBAL but DEFDAT is not PUBLIC.`,
+                        source: 'Kuka-krl-assistant'
+                    };
+                    if (!isDuplicateDiagnostic(newDiagnostic, diagnostics)) {
+                        diagnostics.push(newDiagnostic);
+                    }
+                }
             }
         }
     }
@@ -586,7 +608,7 @@ function validateVariablesUsage(document, variableTypes) {
                             start: { line: lineIndex, character: match.index },
                             end: { line: lineIndex, character: match.index + varName.length }
                         },
-                        source: 'krl-linter'
+                        source: 'Kuka-krl-assistant'
                     };
                     if (!isDuplicateDiagnostic(newDiagnostic, diagnostics)) {
                         diagnostics.push(newDiagnostic);
