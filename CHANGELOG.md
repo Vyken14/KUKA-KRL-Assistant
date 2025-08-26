@@ -3,6 +3,18 @@
 All notable changes to this project will be documented in this file.
 ---
 
+## [1.4.6] - 2025-08-24
+### Fixed
+- Fix issue with variables that could contains "Global" as string and triggered the PUBLIC DEFDAT error
+
+---
+
+## [1.4.5] - 2025-08-24
+### Fixed
+- Fix issue with global variables inside a DEDFAT error
+
+---
+
 ## [1.4.4] - 2025-07-28
 ### Fixed
 - Fix warning for DECL variable with GLOBAL if a predefined type is used

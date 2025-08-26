@@ -515,7 +515,7 @@ function validateDatFile(document, connection) {
             if (!declMatch)
                 continue;
             if (insidePublicDefdat) {
-                if (!/\bGLOBAL\b/i.test(line)) {
+                if (!/^\s*(?:DECL\s+)?GLOBAL\b/i.test(line)) {
                     const newDiagnostic = {
                         severity: node_1.DiagnosticSeverity.Warning,
                         range: {
@@ -531,7 +531,7 @@ function validateDatFile(document, connection) {
                 }
             }
             else {
-                if (/GLOBAL/i.test(line)) {
+                if (/^\s*(?:DECL\s+)?GLOBAL\b/i.test(line)) {
                     const newDiagnostic = {
                         severity: node_1.DiagnosticSeverity.Error,
                         range: {
