@@ -1,11 +1,12 @@
 # Changelog
 
 All notable changes to this project will be documented in this file.
+
 ---
 
 ## [1.4.6] - 2025-08-24
 ### Fixed
-- Fix issue with variables that could contains "Global" as string and triggered the PUBLIC DEFDAT error
+- Fix issue with variables that could contain the string "Global" and trigger the PUBLIC DEFDAT error.
 
 ---
 
