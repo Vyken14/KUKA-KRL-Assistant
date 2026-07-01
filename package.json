@@ -2,7 +2,7 @@
   "name": "kuka-krl-assistant",
   "displayName": "KUKA KRL Assistant",
   "description": "Language features for KUKA KRL",
-  "version": "1.4.6",
+  "version": "1.7.0",
   "publisher": "Alfred",
   "repository": {
     "type": "git",
@@ -23,7 +23,10 @@
         "extensions": [
           ".src",
           ".dat",
-          ".sub"
+          ".sub",
+          ".SRC",
+          ".DAT",
+          ".SUB"
         ],
         "configuration": "./client/krl-language-configuration.json"
       }

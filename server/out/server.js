@@ -54,6 +54,9 @@ connection.onInitialize((params) => {
             textDocumentSync: node_1.TextDocumentSyncKind.Incremental,
             definitionProvider: true,
             hoverProvider: true,
+            documentSymbolProvider: true,
+            referencesProvider: true,
+            foldingRangeProvider: true,
             completionProvider: {
                 triggerCharacters: [
                     '.', '(', ',', ' ', '=', '+', '-', '*', '/', '<', '>', '!',
@@ -183,7 +186,7 @@ connection.onDefinition((params) => __awaiter(void 0, void 0, void 0, function* 
     }
     //Search for name as custom user variable type
     for (const key in structDefinitions) {
-        if (key === functionName) {
+        if (key.toLowerCase() === functionName.toLowerCase()) {
             const resultStruc = yield isFunctionDeclared(functionName, "struc");
             if (resultStruc != undefined) {
                 return node_1.Location.create(resultStruc.uri, {
@@ -193,11 +196,12 @@ connection.onDefinition((params) => __awaiter(void 0, void 0, void 0, function* 
             }
         }
     }
-    //Search for name as variable    
+    //Search for name as variable
     let enclosures = findEnclosuresLines(params.position.line, lines);
     // First, try mergedVariables list
+    const functionNameLower = functionName.toLowerCase();
     for (const element of mergedVariables) {
-        if (element.name === functionName) {
+        if (element.name.toLowerCase() === functionNameLower) {
             // First: try local scope (inside enclosures)
             const scopedResult = yield isFunctionDeclared(functionName, "variable", params.textDocument.uri, enclosures.upperLine, enclosures.bottomLine, lines.join('\n'));
             if (scopedResult) {
@@ -325,6 +329,199 @@ connection.onCompletion((params) => __awaiter(void 0, void 0, void 0, function* 
     logToFile(logMsg);
     return allItems;
 }));
+// ==================
+// Document Symbol Request Handler (Outline / Strg+Shift+O / Breadcrumbs)
+// ==================
+connection.onDocumentSymbol((params) => {
+    var _a, _b;
+    const doc = documents.get(params.textDocument.uri);
+    if (!doc)
+        return [];
+    const lines = doc.getText().split(/\r?\n/);
+    const symbols = [];
+    const defRegex = /^\s*(?:GLOBAL\s+)?(DEF|DEFFCT)\s+(?:(\w+)\s+)?(\w+)\s*\(([^)]*)\)/i;
+    const defdatRegex = /^\s*(?:GLOBAL\s+)?DEFDAT\s+(\w+)(?:\s+(PUBLIC))?/i;
+    const endRegex = /^\s*(END|ENDFCT|ENDDAT)\b/i;
+    let open = null;
+    const emit = (o, endLine, endChar) => {
+        symbols.push({
+            name: o.name,
+            detail: o.detail,
+            kind: o.kind,
+            range: node_1.Range.create(o.startLine, 0, endLine, endChar),
+            selectionRange: node_1.Range.create(o.startLine, o.nameStart, o.startLine, o.nameEnd),
+        });
+    };
+    for (let i = 0; i < lines.length; i++) {
+        const line = lines[i];
+        // Strip line-comments (KRL: ';') for keyword detection
+        const code = line.split(';')[0];
+        if (open) {
+            const endMatch = endRegex.exec(code);
+            if (endMatch && endMatch[1].toUpperCase() === open.expectedEnd) {
+                emit(open, i, line.length);
+                open = null;
+            }
+            continue;
+        }
+        let m = defRegex.exec(code);
+        if (m) {
+            const keyword = m[1].toUpperCase();
+            const returnType = m[2] || '';
+            const name = m[3];
+            const params = m[4].trim();
+            const nameStart = line.indexOf(name);
+            open = {
+                kind: node_1.SymbolKind.Function,
+                name,
+                detail: keyword === 'DEFFCT' ? `${returnType} (${params})` : `(${params})`,
+                startLine: i,
+                nameStart,
+                nameEnd: nameStart + name.length,
+                expectedEnd: keyword === 'DEFFCT' ? 'ENDFCT' : 'END',
+            };
+            continue;
+        }
+        m = defdatRegex.exec(code);
+        if (m) {
+            const name = m[1];
+            const isPublic = !!m[2];
+            const nameStart = line.indexOf(name);
+            open = {
+                kind: node_1.SymbolKind.Module,
+                name,
+                detail: isPublic ? 'PUBLIC' : '',
+                startLine: i,
+                nameStart,
+                nameEnd: nameStart + name.length,
+                expectedEnd: 'ENDDAT',
+            };
+        }
+    }
+    // Unclosed block: span to end of file so the symbol still appears in the outline.
+    if (open) {
+        const lastLine = Math.max(0, lines.length - 1);
+        emit(open, lastLine, (_b = (_a = lines[lastLine]) === null || _a === void 0 ? void 0 : _a.length) !== null && _b !== void 0 ? _b : 0);
+    }
+    return symbols;
+});
+// ==================
+// References Request Handler (Shift+F12 / Right-click → Find All References)
+// ==================
+connection.onReferences((params) => __awaiter(void 0, void 0, void 0, function* () {
+    const doc = documents.get(params.textDocument.uri);
+    if (!doc || !workspaceRoot)
+        return [];
+    const lines = doc.getText().split(/\r?\n/);
+    const lineText = lines[params.position.line];
+    const wordInfo = getWordAtPosition(lineText, params.position.character);
+    if (!wordInfo)
+        return [];
+    const name = wordInfo.word;
+    // Skip pure numeric tokens — \w+ matches them but they're never identifiers
+    if (/^\d/.test(name))
+        return [];
+    // KRL is case-insensitive; word boundary keeps "Foo" out of "FooBar"
+    const wordRegex = new RegExp(`\\b${name}\\b`, 'gi');
+    const declLineRegex = /^\s*(GLOBAL\s+)?(DEF|DEFFCT|DEFDAT|STRUC|ENUM|DECL|SIGNAL)\b/i;
+    const includeDeclaration = params.context.includeDeclaration;
+    const files = yield findSrcFiles(workspaceRoot);
+    const results = [];
+    for (const filePath of files) {
+        const uri = vscode_uri_1.URI.file(filePath).toString();
+        // Prefer in-memory content so unsaved edits are reflected
+        const openDoc = documents.get(uri);
+        const content = openDoc ? openDoc.getText() : fs.readFileSync(filePath, 'utf8');
+        const fileLines = content.split(/\r?\n/);
+        for (let i = 0; i < fileLines.length; i++) {
+            const rawLine = fileLines[i];
+            // Strip line comments before matching
+            const code = rawLine.split(';')[0];
+            const isDeclLine = declLineRegex.test(code);
+            if (isDeclLine && !includeDeclaration)
+                continue;
+            wordRegex.lastIndex = 0;
+            let m;
+            while ((m = wordRegex.exec(code)) !== null) {
+                const start = m.index;
+                const prev = start > 0 ? code[start - 1] : '';
+                // Skip subvariable accesses (a.foo) and system vars ($foo, #foo)
+                if (prev === '.' || prev === '$' || prev === '#')
+                    continue;
+                results.push(node_1.Location.create(uri, {
+                    start: node_1.Position.create(i, start),
+                    end: node_1.Position.create(i, start + name.length),
+                }));
+            }
+        }
+    }
+    return results;
+}));
+// ==================
+// Folding Ranges Request Handler
+// ==================
+connection.onFoldingRanges((params) => {
+    const doc = documents.get(params.textDocument.uri);
+    if (!doc)
+        return [];
+    const lines = doc.getText().split(/\r?\n/);
+    const ranges = [];
+    // open keyword -> matching close keyword
+    const blockOpens = {
+        DEF: 'END',
+        DEFFCT: 'ENDFCT',
+        DEFDAT: 'ENDDAT',
+        IF: 'ENDIF',
+        LOOP: 'ENDLOOP',
+        FOR: 'ENDFOR',
+        WHILE: 'ENDWHILE',
+        SWITCH: 'ENDSWITCH',
+        STRUC: 'ENDSTRUC',
+        REPEAT: 'UNTIL',
+    };
+    // Opens must sit at line start (allow leading GLOBAL for DEF*/STRUC).
+    const openRegex = /^\s*(?:GLOBAL\s+)?(DEF|DEFFCT|DEFDAT|IF|LOOP|FOR|WHILE|SWITCH|STRUC|REPEAT)\b/i;
+    // Word boundaries keep END out of ENDIF etc. Longer alternatives listed first defensively.
+    const closeRegex = /\b(ENDFCT|ENDDAT|ENDIF|ENDLOOP|ENDFOR|ENDWHILE|ENDSWITCH|ENDSTRUC|UNTIL|END)\b/i;
+    const blockStack = [];
+    const foldStack = [];
+    for (let i = 0; i < lines.length; i++) {
+        const raw = lines[i];
+        // ;FOLD / ;ENDFOLD — KUKA editor folds. Detect before comment-stripping.
+        if (/^\s*;\s*FOLD\b/i.test(raw)) {
+            foldStack.push(i);
+            continue;
+        }
+        if (/^\s*;\s*ENDFOLD\b/i.test(raw)) {
+            const start = foldStack.pop();
+            if (start !== undefined && i > start) {
+                ranges.push({ startLine: start, endLine: i, kind: node_1.FoldingRangeKind.Region });
+            }
+            continue;
+        }
+        const code = raw.split(';')[0];
+        const openMatch = openRegex.exec(code);
+        const openKw = openMatch ? openMatch[1].toUpperCase() : null;
+        const closeMatch = closeRegex.exec(code);
+        const closeKw = closeMatch ? closeMatch[1].toUpperCase() : null;
+        // Same-line open + matching close (one-liner IF/STRUC) — nothing to fold.
+        if (openKw && closeKw && blockOpens[openKw] === closeKw)
+            continue;
+        if (openKw) {
+            blockStack.push({ startLine: i, expectedEnd: blockOpens[openKw] });
+        }
+        else if (closeKw) {
+            const top = blockStack[blockStack.length - 1];
+            if (top && top.expectedEnd === closeKw) {
+                blockStack.pop();
+                if (i > top.startLine) {
+                    ranges.push({ startLine: top.startLine, endLine: i });
+                }
+            }
+        }
+    }
+    return ranges;
+});
 function getAllFunctionDeclarations() {
     return __awaiter(this, void 0, void 0, function* () {
         if (!workspaceRoot)
@@ -460,7 +657,8 @@ function findSrcFiles(dir) {
                 const match = defLine.match(defRegex);
                 if (match) {
                     const uri = filePath.startsWith("file://") ? filePath : vscode_uri_1.URI.file(filePath).toString();
-                    const startChar = defLine.indexOf(name);
+                    // KRL is case-insensitive — find name regardless of how it's written in the file
+                    const startChar = defLine.toLowerCase().indexOf(name.toLowerCase());
                     const params = (mode === 'function' && match[4]) ? match[4].trim() : '';
                     return {
                         uri,
